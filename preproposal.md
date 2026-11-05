@@ -1,0 +1,26 @@
+Ion trap junction design with stochastic neural network
+
+**Introduction**
+
+Ion transport is an essential step in programmable trapped-ion based quantum computing system. However, transport usually results in heating of the ions' motional modes that undermines the gate fidelity. Transports across junctions are especially challenging as the ions are subjects to asymetric confinment near the junction that usually results in excessive heating, which can be mitigated through RF junction design and transport function optimization. However, the RF junction design and the transport function are usually optimized seperately due to high degrees of freedom and the costly simulation of the full transport dynamics. Here, we propose to apply Bayesian NPE to predict the transport dynamics given the junction geometry and transport plan and then sample from it to find the optimized junction deisgn with the ideal transport function. In the following section we elaborate on the transport dynamics, standard junction design and transport optimization approach, and detailed plan of using Bayesian NPE for optimization.
+
+**Transport dynamics**
+
+In a scalable 2D Paul trap, ion is trapped on top of the chip through a combination of RF and DC electrodes. In the linear trap without junction, RF electrodes lay along the axial direction and generate effective pseudo-potential by applying oscillating voltages. The minimum of the pseudo-potential determines the ion height, with the radial confinment specified by the pseudo-potential's curvature. The DC electrodes then provides confinement along the axial direction with applied DC voltages. 
+
+In the transport, we apply dynamic DC transport voltage sets with changing position of the axial trapping position to effectively push the ions, while maintaing the applied RF voltages and frequency. The transport voltage sets are solved for each trapping position in the transport trajectory $x(t)$ with target Hessian and gradient of the DC potential. An ideal transport trajectory $x(t)$ usually accelarates at the beginning and deccelarates towards the end to minimize heating. We also use a spline to parameterize $x(t)$ that allows efficient optimization.
+
+The axial symmetric is broken near the junction; as a result, the ion height and radial confinment changes when approaching the junction. This requires careful junction design and transport optimization, that are usually done seperately.
+
+**Standard junction design and transport optimization**
+
+In current junction transport, RF elecrodes at the junction is first designed to minimize the pseudopotential's curvature variance and the axial gradient along the transport axis. Here we focus on the discussion of Y-junction that has three seperate arms and fixed RF width and distance from the center that deterimines the standard ion height. The RF electrodes at the junction is characterized by three control points. Results of the optimization is shown in Fig. 1. DC electrodes are then segmented and layed around the RF electrodes.
+
+With a given junction design, the transport trajectories is then optimized through simulation of the transport dynamics. The transport trajectories $\bf{x}(t)$ with $\bf{x} \in \mathbb{R}^3$ now allows motion away from the trap center and standard ion height. The solved transport DC voltage set $V_s(t)$ then determines the ion's full dynamics with the RF's pseudopotential. We use a simpletic solver to integrate the ion's dynamics over time. People have shown that instead of maintaining a near constant ion height, staying at lower ion height that pirotizes a stable radial confinment is important to reduce overall heating. However, this optimization process involves extensive search of the transport trajectories with full transport dynamics simulation for each trajectory.
+
+**Bayesian NPE for dynamics prediction and optimization**
+
+We propose to use a Bayesian NPE to accelerate the junction transport design and co-optimize the physical geometrey with transport trajectories. Specifically, we will use the control points of junction design and transport trajectories as input and output the final heating of the ion with uncertainty estimated by injecting input dependent noise to the NN similar to BLIPs. We will collect the training data by simulating the ion's transport dynamics of the given junction design and transport trajectoies while fixing other physical parameters that include ion weight, RF width, distance from the center, voltage, frequency, target DC Hessian and gradient. In such simulation, instead of extracting the electric fields from the solved transport voltage sets, ion's dynamics is directly governed by the RF pesudopotential and the target DC potential. To reflect the experimental limitations, we update the target DC potential every 10 $\mu$s as the delay time between each applied voltage sets and inject continous noise to represent the unideal residuls from the typical voltage solutions.
+
+The trained NPE will then be used to co-optimize the junction design and the transport trajectories. In this process, we plan to apply modified cross-entropy method where we iteratively samples the input, simulate the top candidates with full dynamics, finetune the model, and samples new input from fitted distribution of the top candidates with simulated results.
+

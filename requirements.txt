@@ -1,0 +1,6 @@
+numpy>=1.19
+scipy>=1.6
+matplotlib>=3.3
+# The RF pseudopotential comes from the electrode package (NIST ionstorage).
+# On this machine it is installed in the trapsim conda environment:
+#   /opt/anaconda3/envs/trapsim/bin/python
