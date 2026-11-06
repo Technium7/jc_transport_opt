@@ -13,7 +13,7 @@ from .constants import L_SCALE
 from .dataset import design_is_admissible
 from .design import DesignSpace, symmetric_gate_offsets
 from .schedule import schedule_is_admissible
-from .simulate import simulate_design, total_heating
+from .simulate import simulate_design, simulation_settings, stray_field_line, total_heating
 from .active import active_ranking
 from .train import finetune, train_predictor
 
@@ -303,9 +303,7 @@ def optimize_joint(
     """
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    simulate_kwargs = dict(simulate_kwargs or {})
-    simulate_kwargs.setdefault("seeds", (0,))
-    simulate_kwargs.setdefault("noise_std_Vm", 0.0)
+    simulate_kwargs = simulation_settings(simulate_kwargs)
     space = DesignSpace()
     lower, upper = _bounds(space)
     nominal = np.concatenate([space.nominal(), np.zeros(N_GATES)])
@@ -315,6 +313,12 @@ def optimize_joint(
 
     if _cache_is_ready(cache, n):
         rows, quanta, totals, n_train, origin = _load_cache(cache)
+        if quanta.ndim != 3 or quanta.shape[1] != len(simulate_kwargs["seeds"]):
+            raise RuntimeError(
+                "saved joint designs have {} stray-field samples; this run uses {}".format(
+                    quanta.shape[1] if quanta.ndim == 3 else 1, len(simulate_kwargs["seeds"])
+                )
+            )
         if n_train is None:
             n_train = len(rows)
         if origin is None or len(origin) != len(rows):
@@ -447,7 +451,7 @@ def optimize_joint(
 
     lines = [
         "training set is the latin sample of junction, trajectory, and waveform",
-        "stray field: off",
+        stray_field_line(simulate_kwargs),
         "start and end height: 50 um",
         "training designs: {}".format(int(n_train)),
         "latin varied designs: {}".format(len(latin)),

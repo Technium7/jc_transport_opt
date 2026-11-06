@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from .cem import cooptimize
-from .constants import L_SCALE, NOISE_STD_VM, SIM_DT, TRANSPORT_SPEED_M_S, VOLTAGE_UPDATE_S
+from .constants import L_SCALE, NOISE_SEEDS, NOISE_STD_VM, SIM_DT, TRANSPORT_SPEED_M_S, VOLTAGE_UPDATE_S
 from .dataset import Dataset, collect_dataset
 from .design import DesignSpace
 from .demo import run_demo
@@ -197,7 +197,7 @@ def _cmd_nearby(args):
         epochs=args.epochs,
         lbfgs_maxiter=args.lbfgs,
         seed=args.seed,
-        simulate_kwargs=_physics(args),
+        simulate_kwargs=dict(_physics(args), seeds=tuple(args.seeds)),
         cooptimize=args.cooptimize,
         warm_start=args.warm or None,
     )
@@ -382,6 +382,10 @@ def main(argv=None):
     nearby.add_argument("--epochs", type=int, default=40)
     nearby.add_argument("--lbfgs", type=int, default=15)
     nearby.add_argument("--seed", type=int, default=0)
+    nearby.add_argument(
+        "--seeds", type=int, nargs="+", default=list(NOISE_SEEDS),
+        help="stray-field samples per design; at least {} when the field is on".format(len(NOISE_SEEDS)),
+    )
     nearby.add_argument(
         "--cooptimize", action="store_true",
         help="search the junction, the trajectory, and the waveform; each may be updated or kept",

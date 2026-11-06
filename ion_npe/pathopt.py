@@ -13,7 +13,7 @@ import numpy as np
 from .dataset import design_is_admissible
 from .design import DesignSpace, symmetric_gate_offsets
 from .schedule import schedule_is_admissible
-from .simulate import simulate_design, total_heating
+from .simulate import simulate_design, simulation_settings, total_heating
 from .train import train_predictor
 
 
@@ -85,8 +85,7 @@ def optimize_trajectory(
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     simulate_kwargs = dict(simulate_kwargs or {})
-    simulate_kwargs.setdefault("seeds", (0,))
-    simulate_kwargs.setdefault("noise_std_Vm", 0.0)
+    simulate_kwargs = simulation_settings(simulate_kwargs)
     space = DesignSpace()
     nominal = space.nominal()
     names, z_columns = _parts(space)

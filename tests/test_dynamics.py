@@ -4,14 +4,28 @@ import unittest
 
 import numpy as np
 
-from ion_npe.constants import HBAR, L_SCALE, MASS, OMEGA_AX, OMEGA_RAD, SIM_DT, VOLTAGE_UPDATE_S
+from ion_npe.constants import HBAR, L_SCALE, MASS, NOISE_SEEDS, NOISE_STD_VM, OMEGA_AX, OMEGA_RAD, SIM_DT, VOLTAGE_UPDATE_S
 from ion_npe.dynamics import hold_steps, integrate, path_directions, path_frame_noise
+from ion_npe.simulate import simulation_settings
 
 
 class DynamicsTests(unittest.TestCase):
     def test_voltage_hold_matches_one_hundred_nanoseconds(self):
         steps = hold_steps(VOLTAGE_UPDATE_S)
         self.assertLessEqual(abs(steps * SIM_DT - 100e-9), 0.5 * SIM_DT)
+
+    def test_a_stray_field_draws_enough_samples_for_the_stochastic_network(self):
+        settings = simulation_settings()
+        self.assertEqual(settings["noise_std_Vm"], NOISE_STD_VM)
+        self.assertEqual(settings["noise_std_Vm"], 100.0)
+        self.assertEqual(settings["seeds"], NOISE_SEEDS)
+        self.assertGreaterEqual(len(settings["seeds"]), 10)
+        with self.assertRaises(ValueError):
+            simulation_settings({"noise_std_Vm": 100.0, "seeds": (0, 1, 2)})
+
+    def test_a_quiet_run_can_use_one_sample(self):
+        settings = simulation_settings({"noise_std_Vm": 0.0, "seeds": (0,)})
+        self.assertEqual(settings["seeds"], (0,))
 
     def test_noise_and_its_slope_vanish_at_the_ends(self):
         field = path_frame_noise(2001, 100.0, seed=3)

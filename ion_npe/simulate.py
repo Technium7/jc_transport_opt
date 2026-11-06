@@ -12,6 +12,7 @@ import numpy as np
 
 from .constants import (
     L_SCALE,
+    NOISE_SEEDS,
     NOISE_STD_VM,
     SIM_DT,
     TRANSPORT_SPEED_M_S,
@@ -53,6 +54,39 @@ def _fail(message):
         f_trans_MHz=(np.nan, np.nan),
         z_range=(np.nan, np.nan),
         n_hold=0,
+    )
+
+
+def simulation_settings(simulate_kwargs=None):
+    """Noise amplitude and the samples drawn for one design.
+
+    A positive stray field needs ``NOISE_SEEDS`` samples. One sample has no
+    variance, so the stochastic network cannot be trained on it.
+    """
+    kwargs = dict(simulate_kwargs or {})
+    kwargs.setdefault("noise_std_Vm", NOISE_STD_VM)
+    amplitude = float(kwargs["noise_std_Vm"])
+    if amplitude < 0.0:
+        raise ValueError("noise amplitude must be non-negative")
+    seeds = tuple(int(seed) for seed in kwargs.get("seeds", NOISE_SEEDS))
+    if not seeds:
+        raise ValueError("noise seeds are empty")
+    if amplitude > 0.0 and len(seeds) < len(NOISE_SEEDS):
+        raise ValueError(
+            "stray field {:.4g} V/m needs at least {} samples per design "
+            "for the stochastic network; got {}".format(amplitude, len(NOISE_SEEDS), len(seeds))
+        )
+    kwargs["seeds"] = seeds
+    return kwargs
+
+
+def stray_field_line(simulate_kwargs):
+    """One summary line for the stray field actually used."""
+    amplitude = float(simulate_kwargs["noise_std_Vm"])
+    if amplitude == 0.0:
+        return "stray field: off"
+    return "stray field: {:.4g} V/m, {} samples per design".format(
+        amplitude, len(simulate_kwargs["seeds"])
     )
 
 

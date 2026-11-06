@@ -48,8 +48,11 @@ OMEGA_RAD = 2.0 * np.pi * F_RADIAL
 KAPPA_AX = OMEGA_AX ** 2 * MASS * L_SCALE ** 2 / CHARGE
 KAPPA_RAD = OMEGA_RAD ** 2 * MASS * L_SCALE ** 2 / CHARGE
 
-# Each target DC well is held for 100 ns. The stray field is off. Pass a
-# positive amplitude to simulate the residual of a real voltage solution.
+# Each target DC well is held for 100 ns. The stray field is the residual of a
+# real voltage solution: 100 V/m is the standard deviation of its maximum on
+# each path-frame axis. Ten independent draws per design give the stochastic
+# network a mean and a variance to fit. A quiet run sets the amplitude to 0.
 VOLTAGE_UPDATE_S = 100e-9
-NOISE_STD_VM = 0.0
+NOISE_STD_VM = 100.0
+NOISE_SEEDS = tuple(range(10))
 TRANSPORT_SPEED_M_S = 7.5
