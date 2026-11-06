@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from .design import DesignSpace, within_transport_caps
-from .simulate import simulate_design, total_heating
+from .simulate import total_heating
 from .trajectory import controls_stay_ordered, height_within_cap
 
 
@@ -128,8 +128,11 @@ def collect_dataset(
     """
     if design not in ("random", "latin"):
         raise ValueError("design must be random or latin")
+    from .farm import get_farm, width_for
+
     space = space if space is not None else DesignSpace()
     seeds = [int(item) for item in seeds]
+    mode = design
     rng = np.random.default_rng(seed)
     rows = []
     quanta = []
@@ -139,14 +142,53 @@ def collect_dataset(
     attempts = 0
     limit = max(int(n) * int(max_attempts_factor), int(n))
     queue = []
+    pending = []
+    farm = get_farm()
+    call_kwargs = dict(simulate_kwargs)
+    call_kwargs["seeds"] = list(seeds)
     print(
         "collecting {} designs, {} noise seeds, {} cover, fraction {:.2f}, caps 10 um".format(
-            n, len(seeds), design, fraction
+            n, len(seeds), mode, fraction
         ),
         flush=True,
     )
+
+    def _flush():
+        if not pending:
+            return
+        packed = farm.simulate(
+            "design",
+            np.vstack([item[1] for item in pending]),
+            call_kwargs,
+        )
+        for (attempt_i, proposal), result in zip(pending, packed):
+            if len(rows) >= n:
+                break
+            if not result["ok"]:
+                print("  skip {:3d}: {}".format(attempt_i, result["message"]), flush=True)
+                continue
+            rows.append(proposal)
+            quanta.append(result["quanta"])
+            if np.isfinite(result["quanta_ideal"]).all():
+                ideal.append(result["quanta_ideal"])
+            else:
+                ideal.append(np.full_like(result["quanta"], np.nan))
+            lengths.append(result["length_m"])
+            durations.append(result["duration_s"])
+            heating = float(total_heating(result["quanta"]))
+            print(
+                "  {:3d}/{}  heating {:.4g}  ({:.1f} to {:.1f} MHz)".format(
+                    len(rows), n, heating, result["f_trans_MHz"][0], result["f_trans_MHz"][1]
+                ),
+                flush=True,
+            )
+        pending.clear()
+
     while len(rows) < n and attempts < limit:
-        if design == "latin":
+        if pending and len(pending) >= width_for(n - len(rows), farm.size):
+            _flush()
+            continue
+        if mode == "latin":
             if not queue:
                 queue = list(space.sample_latin(
                     rng, max((n - len(rows)) * 2, 8),
@@ -156,29 +198,12 @@ def collect_dataset(
         else:
             proposal = space.sample(rng, 1, fraction=fraction, cap_fraction=cap_fraction)[0]
         attempts += 1
-        design = space.unpack(proposal)
-        if not design_is_admissible(design):
+        proposal_design = space.unpack(proposal)
+        if not design_is_admissible(proposal_design):
             print("  skip {:3d}: outside the 10 um caps or the bend folds".format(attempts), flush=True)
             continue
-        result = simulate_design(design, seeds=seeds, **simulate_kwargs)
-        if not result.ok:
-            print("  skip {:3d}: {}".format(attempts, result.message), flush=True)
-            continue
-        rows.append(proposal)
-        quanta.append(result.quanta)
-        if np.isfinite(result.quanta_ideal).all():
-            ideal.append(result.quanta_ideal)
-        else:
-            ideal.append(np.full_like(result.quanta, np.nan))
-        lengths.append(result.length_m)
-        durations.append(result.duration_s)
-        heating = float(total_heating(result.quanta))
-        print(
-            "  {:3d}/{}  heating {:.4g}  ({:.1f} to {:.1f} MHz)".format(
-                len(rows), n, heating, result.f_trans_MHz[0], result.f_trans_MHz[1]
-            ),
-            flush=True,
-        )
+        pending.append((attempts, proposal))
+    _flush()
     if len(rows) < n:
         raise RuntimeError(
             "collected {} of {} designs after {} attempts".format(len(rows), n, attempts)

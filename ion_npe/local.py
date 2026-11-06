@@ -106,6 +106,9 @@ def _latin_rows(rng, n, center, lo, hi, free):
 
 
 def _collect_slice(rng, n, center, lo, hi, free, space, simulate_kwargs, label):
+    from .farm import get_farm, width_for
+
+    farm = get_farm()
     rows = []
     quanta = []
     totals = []
@@ -117,22 +120,36 @@ def _collect_slice(rng, n, center, lo, hi, free, space, simulate_kwargs, label):
     while len(rows) < target and tries < cap:
         tries += 1
         batch = _latin_rows(rng, max((target - len(rows)) * 2, 16), center, lo, hi, free)
+        prepared_batch = []
         for row in batch:
-            if len(rows) >= target:
-                break
             prepared = project_joint_row(row)
-            result = _simulate_row(space, prepared, simulate_kwargs)
-            if result is None:
-                continue
-            heating = float(total_heating(result.quanta))
-            rows.append(prepared)
-            quanta.append(np.asarray(result.quanta, dtype=float))
-            totals.append(heating)
-            if len(rows) == 1 or len(rows) % 50 == 0 or len(rows) == target:
-                print(
-                    "  {} {:4d}/{}  heating {:.4g}".format(label, len(rows), target, heating),
-                    flush=True,
-                )
+            if _admissible(_unpack(space, prepared)):
+                prepared_batch.append(prepared)
+        cursor = 0
+        while cursor < len(prepared_batch) and len(rows) < target:
+            need = target - len(rows)
+            take = width_for(need, farm.size)
+            chunk = prepared_batch[cursor:cursor + take]
+            cursor += len(chunk)
+            if len(chunk) == 0:
+                break
+            packed = farm.simulate("joint", np.vstack(chunk), simulate_kwargs)
+            for prepared, result in zip(chunk, packed):
+                if len(rows) >= target:
+                    break
+                if not result["ok"]:
+                    if result["message"]:
+                        print("  skip: {}".format(result["message"]), flush=True)
+                    continue
+                heating = float(total_heating(result["quanta"]))
+                rows.append(prepared)
+                quanta.append(np.asarray(result["quanta"], dtype=float))
+                totals.append(heating)
+                if len(rows) == 1 or len(rows) % 50 == 0 or len(rows) == target:
+                    print(
+                        "  {} {:4d}/{}  heating {:.4g}".format(label, len(rows), target, heating),
+                        flush=True,
+                    )
     if len(rows) < target:
         raise RuntimeError("could not simulate {} {} designs".format(target, label))
     return rows, quanta, totals

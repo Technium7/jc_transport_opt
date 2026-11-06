@@ -10,7 +10,7 @@ import numpy as np
 
 from .dataset import Dataset, design_is_admissible
 from .design import BoxGaussian
-from .simulate import simulate_design, total_heating
+from .simulate import total_heating
 from .train import finetune
 
 
@@ -87,25 +87,26 @@ def cooptimize(
             ),
             flush=True,
         )
-        for index in chosen:
-            result = simulate_design(
-                space.unpack(candidates[index]),
-                seeds=dataset.seeds,
-                **simulate_kwargs,
-            )
-            if not result.ok:
-                print("  skip: {}".format(result.message), flush=True)
+        from .farm import get_farm
+
+        call_kwargs = dict(simulate_kwargs)
+        call_kwargs["seeds"] = [int(item) for item in dataset.seeds]
+        chosen_rows = candidates[np.asarray(chosen, dtype=int)]
+        packed = get_farm().simulate("design", chosen_rows, call_kwargs)
+        for index, result in zip(chosen, packed):
+            if not result["ok"]:
+                print("  skip: {}".format(result["message"]), flush=True)
                 continue
-            heating = float(total_heating(result.quanta))
+            heating = float(total_heating(result["quanta"]))
             print("  simulated heating {:.4g}".format(heating), flush=True)
             new_x.append(candidates[index])
-            new_q.append(result.quanta)
-            if np.isfinite(result.quanta_ideal).all():
-                new_ideal.append(result.quanta_ideal)
+            new_q.append(result["quanta"])
+            if np.isfinite(result["quanta_ideal"]).all():
+                new_ideal.append(result["quanta_ideal"])
             else:
-                new_ideal.append(np.full_like(result.quanta, np.nan))
-            new_length.append(result.length_m)
-            new_duration.append(result.duration_s)
+                new_ideal.append(np.full_like(result["quanta"], np.nan))
+            new_length.append(result["length_m"])
+            new_duration.append(result["duration_s"])
         if new_x:
             dataset = Dataset(
                 np.vstack([dataset.x, np.vstack(new_x)]),

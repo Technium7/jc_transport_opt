@@ -11,6 +11,16 @@ From the project directory, with the trapsim environment:
     python -m ion_npe nearby -o outputs/nearby
     python -m ion_npe schedule -o outputs/schedule
     python -m ion_npe demo
+
+On the G2 mehta partition, submit from the project directory:
+
+    sbatch cluster/run.sbatch collect -n 400 -o data/train.npz
+    sbatch --nodes=1 --ntasks=1 cluster/run.sbatch train -d data/train.npz -o data/models
+    sbatch cluster/run.sbatch optimize -d data/train.npz -m data/models/stochastic.npz
+
+Or one allocation for all three: ``sbatch cluster/pipeline.sbatch``.
+``study``, ``joint``, and ``nearby`` go through ``cluster/run.sbatch`` as well.
+The default request is 10 nodes at 4G each (40G). The cap is 16 nodes and 128G.
 """
 
 import argparse
@@ -397,7 +407,24 @@ def main(argv=None):
     nearby.set_defaults(func=_cmd_nearby)
 
     args = parser.parse_args(argv)
-    args.func(args)
+    from .farm import get_farm
+
+    farm = get_farm()
+    if farm.size > 1 and not farm.is_root:
+        farm.serve()
+        return
+    try:
+        args.func(args)
+    except BaseException:
+        if farm.size > 1 and farm.is_root:
+            try:
+                farm.stop()
+            except Exception as err:
+                print("farm shutdown: {}".format(err), flush=True)
+        raise
+    else:
+        if farm.size > 1 and farm.is_root:
+            farm.stop()
 
 
 if __name__ == "__main__":

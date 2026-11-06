@@ -13,7 +13,7 @@ import numpy as np
 from .dataset import design_is_admissible
 from .design import DesignSpace, symmetric_gate_offsets
 from .schedule import schedule_is_admissible
-from .simulate import simulate_design, simulation_settings, total_heating
+from .simulate import simulation_settings, total_heating
 from .train import train_predictor
 
 
@@ -124,15 +124,21 @@ def optimize_trajectory(
     gates = np.vstack(keep_g + [cloud_g])
     print("collecting {} trajectories, junction fixed".format(len(trajectories)), flush=True)
 
+    from .farm import get_farm
+
+    joint_rows = []
+    for index in range(len(trajectories)):
+        full = np.array(nominal, copy=True)
+        full[8:] = trajectories[index]
+        joint_rows.append(np.concatenate([full, gates[index]]))
+    packed = get_farm().simulate("joint", np.vstack(joint_rows), simulate_kwargs)
     quanta = []
     totals = []
-    for index in range(len(trajectories)):
-        design = _design_from(space, nominal, trajectories[index], gates[index])
-        result = simulate_design(design, **simulate_kwargs)
-        if not result.ok:
-            raise RuntimeError(result.message)
-        heating = float(total_heating(result.quanta))
-        quanta.append(result.quanta)
+    for index, result in enumerate(packed):
+        if not result["ok"]:
+            raise RuntimeError(result["message"])
+        heating = float(total_heating(result["quanta"]))
+        quanta.append(result["quanta"])
         totals.append(heating)
         print("  {:4d}  heating {:.4g}".format(index + 1, heating), flush=True)
     quanta = np.stack(quanta)
@@ -164,19 +170,25 @@ def optimize_trajectory(
             "trajectory round {}  simulating {}".format(iteration + 1, len(chosen)),
             flush=True,
         )
+        from .farm import get_farm
+
+        joint_rows = []
+        for index in chosen:
+            full = np.array(nominal, copy=True)
+            full[8:] = pool_t[index]
+            joint_rows.append(np.concatenate([full, pool_g[index]]))
+        packed = get_farm().simulate("joint", np.vstack(joint_rows), simulate_kwargs)
         new_q = []
         new_total = []
         kept_t = []
         kept_g = []
-        for index in chosen:
-            design = _design_from(space, nominal, pool_t[index], pool_g[index])
-            result = simulate_design(design, **simulate_kwargs)
-            if not result.ok:
-                print("  skip: {}".format(result.message), flush=True)
+        for index, result in zip(chosen, packed):
+            if not result["ok"]:
+                print("  skip: {}".format(result["message"]), flush=True)
                 continue
-            heating = float(total_heating(result.quanta))
+            heating = float(total_heating(result["quanta"]))
             print("  simulated heating {:.4g}".format(heating), flush=True)
-            new_q.append(result.quanta)
+            new_q.append(result["quanta"])
             new_total.append(heating)
             kept_t.append(pool_t[index])
             kept_g.append(pool_g[index])

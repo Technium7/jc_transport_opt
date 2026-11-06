@@ -72,21 +72,25 @@ def _with_offsets(design, offsets):
 
 
 def _simulate_rows(base, offsets, simulate_kwargs):
+    from .farm import get_farm
+
+    offsets = np.atleast_2d(np.asarray(offsets, dtype=float))
+    base_vec = DesignSpace().pack(base)
+    tiled = np.repeat(base_vec.reshape(1, -1), len(offsets), axis=0)
+    packed = get_farm().simulate("joint", np.hstack([tiled, offsets]), simulate_kwargs)
     quanta = []
     totals = []
-    for index, row in enumerate(offsets):
-        design = _with_offsets(base, row)
-        result = simulate_design(design, **simulate_kwargs)
-        if not result.ok:
-            raise RuntimeError(result.message)
-        heating = float(total_heating(result.quanta))
-        quanta.append(result.quanta)
+    for index, result in enumerate(packed):
+        if not result["ok"]:
+            raise RuntimeError(result["message"])
+        heating = float(total_heating(result["quanta"]))
+        quanta.append(result["quanta"])
         totals.append(heating)
         print(
             "  {:4d}  heating {:.4g}  quanta {}".format(
                 index + 1,
                 heating,
-                " ".join("{:.4g}".format(float(v)) for v in result.quanta.reshape(-1)),
+                " ".join("{:.4g}".format(float(v)) for v in result["quanta"].reshape(-1)),
             ),
             flush=True,
         )

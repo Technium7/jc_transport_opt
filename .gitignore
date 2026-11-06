@@ -3,3 +3,5 @@ __pycache__/
 .mplcache/
 outputs/
 data/
+logs/*.out
+logs/*.err

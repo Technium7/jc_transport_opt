@@ -98,57 +98,92 @@ def _draw(rng, n, mean, std, lower, upper, space):
     return np.vstack(rows)
 
 
+def _extend_joint(rows, quanta, totals, prepared, packed, limit, label, log_every):
+    """Append successful integrations, in order, until ``limit`` rows are stored."""
+    for row, result in zip(prepared, packed):
+        if len(rows) >= int(limit):
+            break
+        if not result["ok"]:
+            if result["message"]:
+                print("  skip: {}".format(result["message"]), flush=True)
+            continue
+        heating = float(total_heating(result["quanta"]))
+        rows.append(np.asarray(row, dtype=float))
+        quanta.append(result["quanta"])
+        totals.append(heating)
+        if log_every <= 1 or len(rows) == 1 or len(rows) % int(log_every) == 0 or len(rows) == int(limit):
+            print(
+                "  {} {:4d}/{}  heating {:.4g}".format(label, len(rows), int(limit), heating),
+                flush=True,
+            )
+    return rows, quanta, totals
+
+
 def _collect_latin(rng, n, lower, upper, space, simulate_kwargs):
     """Space-filling joint designs. Each draw moves the junction, the path, and the gates."""
     from scipy.stats.qmc import LatinHypercube
 
+    from .farm import get_farm, width_for
+
+    farm = get_farm()
     rows = []
     quanta = []
     totals = []
+    queue = []
     while len(rows) < int(n):
-        batch_n = max((int(n) - len(rows)) * 2, 64)
-        unit = LatinHypercube(d=len(lower), seed=rng).random(batch_n)
-        batch = lower + unit * (upper - lower)
-        for row in batch:
-            if len(rows) >= int(n):
-                break
-            prepared = project_joint_row(row)
-            result = _simulate_row(space, prepared, simulate_kwargs)
-            if result is None:
+        if not queue:
+            batch_n = max((int(n) - len(rows)) * 2, 64)
+            unit = LatinHypercube(d=len(lower), seed=rng).random(batch_n)
+            batch = lower + unit * (upper - lower)
+            for row in batch:
+                prepared = project_joint_row(row)
+                if _admissible(_unpack(space, prepared)):
+                    queue.append(prepared)
+            if not queue:
                 continue
-            heating = float(total_heating(result.quanta))
-            rows.append(prepared)
-            quanta.append(result.quanta)
-            totals.append(heating)
-            if len(rows) == 1 or len(rows) % 50 == 0 or len(rows) == int(n):
-                print(
-                    "  varied {:4d}/{}  heating {:.4g}".format(len(rows), int(n), heating),
-                    flush=True,
-                )
+        need = int(n) - len(rows)
+        take = min(len(queue), width_for(need, farm.size))
+        chunk = queue[:take]
+        del queue[:take]
+        packed = farm.simulate("joint", np.vstack(chunk), simulate_kwargs)
+        rows, quanta, totals = _extend_joint(
+            rows, quanta, totals, chunk, packed, n, "varied", log_every=50,
+        )
     return np.vstack(rows), np.stack(quanta), np.asarray(totals, dtype=float)
 
 
 def _collect(rng, n, mean, std, lower, upper, space, simulate_kwargs, label):
+    from .farm import get_farm, width_for
+
+    farm = get_farm()
     rows = []
     quanta = []
     totals = []
+    pending = []
     tries = 0
     cap = max(int(n) * 40, 40)
+
+    def _flush():
+        nonlocal rows, quanta, totals
+        if not pending:
+            return
+        packed = farm.simulate("joint", np.vstack(pending), simulate_kwargs)
+        rows, quanta, totals = _extend_joint(
+            rows, quanta, totals, pending, packed, n, label, log_every=1,
+        )
+        pending.clear()
+
     while len(rows) < int(n) and tries < cap:
+        if pending and len(pending) >= width_for(int(n) - len(rows), farm.size):
+            _flush()
+            continue
         tries += 1
         row = np.clip(rng.normal(mean, std), lower, upper)
         prepared = project_joint_row(row)
-        result = _simulate_row(space, prepared, simulate_kwargs)
-        if result is None:
+        if not _admissible(_unpack(space, prepared)):
             continue
-        heating = float(total_heating(result.quanta))
-        rows.append(prepared)
-        quanta.append(result.quanta)
-        totals.append(heating)
-        print(
-            "  {} {:4d}/{}  heating {:.4g}".format(label, len(rows), int(n), heating),
-            flush=True,
-        )
+        pending.append(prepared)
+    _flush()
     if len(rows) < int(n):
         raise RuntimeError("could not simulate {} joint designs".format(n))
     return np.vstack(rows), np.stack(quanta), np.asarray(totals, dtype=float)
@@ -223,29 +258,56 @@ def _latin_pool(rng, n, lower, upper, space):
 
 def _simulate_ordered(space, pool, order, predicted, existing, lower, upper, n_take, simulate_kwargs, label):
     """Integrate novel rows in ``order`` until ``n_take`` succeed."""
+    from .farm import get_farm, width_for
+
+    farm = get_farm()
     kept = []
     quanta = []
     totals = []
+    pending_index = []
+    pending_row = []
+
+    def _flush():
+        nonlocal existing
+        if not pending_row:
+            return
+        packed = farm.simulate("joint", np.vstack(pending_row), simulate_kwargs)
+        for index, row, result in zip(pending_index, pending_row, packed):
+            if len(kept) >= int(n_take):
+                break
+            if not _novel(row, existing, lower, upper):
+                continue
+            if not result["ok"]:
+                if result["message"]:
+                    print("  skip: {}".format(result["message"]), flush=True)
+                continue
+            heating = float(total_heating(result["quanta"]))
+            print(
+                "  {} heating {:.4g}  predicted {:.4g}".format(
+                    label, heating, float(predicted[index])
+                ),
+                flush=True,
+            )
+            kept.append(row)
+            quanta.append(np.asarray(result["quanta"], dtype=float))
+            totals.append(heating)
+            existing = np.vstack([existing, np.asarray(row, dtype=float).reshape(1, -1)])
+        pending_index.clear()
+        pending_row.clear()
+
     for index in order:
         if len(kept) >= int(n_take):
             break
         row = project_joint_row(pool[index])
         if not _novel(row, existing, lower, upper):
             continue
-        result = _simulate_row(space, row, simulate_kwargs)
-        if result is None:
+        if not _admissible(_unpack(space, row)):
             continue
-        heating = float(total_heating(result.quanta))
-        print(
-            "  {} heating {:.4g}  predicted {:.4g}".format(
-                label, heating, float(predicted[index])
-            ),
-            flush=True,
-        )
-        kept.append(row)
-        quanta.append(np.asarray(result.quanta, dtype=float))
-        totals.append(heating)
-        existing = np.vstack([existing, row.reshape(1, -1)])
+        pending_index.append(int(index))
+        pending_row.append(row)
+        if len(pending_row) >= width_for(int(n_take) - len(kept), farm.size):
+            _flush()
+    _flush()
     return kept, quanta, totals
 
 
