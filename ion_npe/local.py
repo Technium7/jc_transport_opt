@@ -3,9 +3,9 @@
 Each round collects a large neighborhood of the current design. The neighborhood
 has its own junction, trajectory, and waveform samples, plus designs that move
 all three together, so a fit can see a waveform-only improvement and a joint
-one. The next round recenters on the lowest simulated heating and on the
-uncertain low-heating region the network proposes, and collects another full
-batch there.
+one. Any of the three can be updated or kept. The next round recenters on the
+lowest simulated heating and on the uncertain low-heating region the network
+proposes, and collects another full batch there.
 """
 
 from pathlib import Path
@@ -74,9 +74,15 @@ def embed(center, values, free):
     return row
 
 
-def _split_counts(n):
-    """Waveform, junction, and trajectory slices, plus a joint slice."""
+def _split_counts(n, joint_only=False):
+    """Waveform, junction, and trajectory slices, plus a joint slice.
+
+    ``joint_only`` puts every design in the joint slice, so the junction, the
+    trajectory, and the waveform move together.
+    """
     n = int(n)
+    if joint_only:
+        return {"waveform": 0, "junction": 0, "trajectory": 0, "joint": n}
     each = n // 4
     return {
         "waveform": each,
@@ -264,6 +270,13 @@ def _slice_bests(origin, totals):
     return ", ".join(parts)
 
 
+def _warm_row(path):
+    data = np.load(path)
+    rows = np.asarray(data["rows"], dtype=float)
+    totals = np.asarray(data["totals"], dtype=float)
+    return project_joint_row(rows[int(np.argmin(totals))])
+
+
 def optimize_local(
     out,
     n=2000,
@@ -273,6 +286,8 @@ def optimize_local(
     lbfgs_maxiter=15,
     seed=0,
     simulate_kwargs=None,
+    cooptimize=False,
+    warm_start=None,
 ):
     """Start at the nominal path and iteratively collect nearby joint designs."""
     if int(n) < MIN_TRAIN:
@@ -320,16 +335,35 @@ def optimize_local(
         next_round = 0
         _save(cache, rows, quanta, totals, origin, next_round, center)
 
+    if next_round == 0 and warm_start and not np.any(origin == "reference"):
+        print("reference design from {}".format(warm_start), flush=True)
+        reference = _warm_row(warm_start)
+        reference_result = _simulate_row(space, reference, simulate_kwargs)
+        if reference_result is None:
+            raise RuntimeError("the warm-start design is not admissible")
+        heating = float(total_heating(reference_result.quanta))
+        print("  heating {:.4g}".format(heating), flush=True)
+        rows, quanta, totals, origin = _stack(
+            rows, quanta, totals, origin, [reference], [reference_result.quanta], [heating], "reference",
+        )
+        center = reference
+        _save(cache, rows, quanta, totals, origin, next_round, center)
+
     if next_round == 0:
+        where = "the warm-start design" if warm_start else "the nominal path"
         print(
-            "round 0  {} designs around the nominal path (junction, trajectory, waveform)".format(int(n)),
+            "round 0  {} designs around {} ({})".format(
+                int(n),
+                where,
+                "junction, trajectory, and waveform, each updated or kept",
+            ),
             flush=True,
         )
         def _checkpoint(rows, quanta, totals, origin):
-            _save(cache, rows, quanta, totals, origin, 0, nominal)
+            _save(cache, rows, quanta, totals, origin, 0, center)
 
         rows, quanta, totals, origin = _collect_neighborhood(
-            rng, _split_counts(n), nominal, initial_half, lower, upper, space,
+            rng, _split_counts(n), center, initial_half, lower, upper, space,
             simulate_kwargs, "r0", rows, quanta, totals, origin, on_update=_checkpoint,
         )
         next_round = 1
@@ -423,7 +457,8 @@ def optimize_local(
     joint_best, joint_n = _best_tag("joint")
     active_best, active_n = _best_tag("active")
     lines = [
-        "local search starting at the nominal path",
+        "junction, trajectory, and waveform, each updated or kept"
+        if cooptimize else "local search starting at the nominal path",
         "stray field: off",
         "start and end height: 50 um",
         "designs simulated: {}".format(len(totals)),

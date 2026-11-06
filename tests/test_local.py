@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from ion_npe.local import blocks, embed, neighborhood_half, box_around
+from ion_npe.local import _split_counts, blocks, embed, neighborhood_half, box_around
 from ion_npe.design import DesignSpace
 from ion_npe.joint import _bounds
 
@@ -19,6 +19,13 @@ class LocalNeighborhoodTests(unittest.TestCase):
         self.assertTrue(np.allclose(moved[group["junction"]], center[group["junction"]]))
         self.assertTrue(np.allclose(moved[group["trajectory"]], center[group["trajectory"]]))
         self.assertTrue(np.allclose(moved[group["waveform"]], 0.02))
+
+    def test_a_round_can_update_one_group_and_keep_the_others(self):
+        counts = _split_counts(2000)
+        self.assertEqual(counts["waveform"], 500)
+        self.assertEqual(counts["junction"], 500)
+        self.assertEqual(counts["trajectory"], 500)
+        self.assertEqual(counts["joint"], 500)
 
     def test_height_window_can_leave_50_um_and_gates_cover_a_waveform_shift(self):
         space = DesignSpace()

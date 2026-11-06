@@ -148,11 +148,19 @@ def _colored_path(ax, xy, speed, vmin, vmax, lw=2.0):
     return drawn
 
 
+def _height_profile(design):
+    """Arc length in μm and ion height in μm. Height does not follow the speed waveform."""
+    path = path_geometry(design, n=1201)
+    step = np.linalg.norm(np.diff(path, axis=0), axis=1)
+    distance_um = np.concatenate([[0.0], np.cumsum(step)]) * L_SCALE * 1e6
+    return distance_um, path[:, 2] * L_SCALE * 1e6
+
+
 def plot_best_design(design, out, reference=None, total_quanta=None):
-    """Junction, bend controls, and the optimized transport waveform.
+    """Junction, bend controls, transport waveform, and height along the path.
 
     The path is colored by the ion's speed. ``reference`` is the nominal
-    waveform, drawn as a dashed speed profile.
+    design, drawn dashed on the speed and height panels.
     """
     from .junction import build_junction
 
@@ -168,11 +176,12 @@ def plot_best_design(design, out, reference=None, total_quanta=None):
         ref_distance = ref_speed = None
     vmax = max(vmax * 1.05, 1.0)
 
-    fig = plt.figure(figsize=(10.4, 7.5), constrained_layout=True)
-    grid = fig.add_gridspec(2, 2, height_ratios=[1.45, 0.72])
+    fig = plt.figure(figsize=(10.4, 9.6), constrained_layout=True)
+    grid = fig.add_gridspec(3, 2, height_ratios=[1.45, 0.72, 0.72])
     ax = fig.add_subplot(grid[0, :])
     bend = fig.add_subplot(grid[1, 0])
     right = fig.add_subplot(grid[1, 1])
+    height = fig.add_subplot(grid[2, :])
     junction = build_junction(design.junction)
 
     def rails(target):
@@ -253,6 +262,37 @@ def plot_best_design(design, out, reference=None, total_quanta=None):
     right.set_title("transport waveform")
     right.set_xlim(0.0, distance[-1] * 1e6)
     right.set_ylim(0.0, vmax)
+    opt_distance, opt_height = _height_profile(design)
+    if reference is not None:
+        ref_height_distance, ref_height = _height_profile(reference)
+        height.plot(ref_height_distance, ref_height, color="#9a9a9a", ls="--", lw=1.2, label="nominal")
+    height.plot(opt_distance, opt_height, color="#4C78A8", lw=1.6, label="optimized")
+    height.set_xlabel("distance along the path (μm)")
+    height.set_ylabel("height (μm)")
+    height.set_title("height through transport")
+    height.set_xlim(0.0, opt_distance[-1])
+    height.legend(frameon=False, fontsize=8)
+    fig.savefig(out, dpi=140)
+    plt.close(fig)
+
+
+def plot_transport_height(designs, out):
+    """Ion height against distance along the path.
+
+    ``designs`` is a sequence of ``(label, design, style)``. ``style`` is a
+    matplotlib line-style dict. Height is a property of the path, so the
+    distance is arc length and does not follow the speed waveform.
+    """
+    fig, ax = plt.subplots(figsize=(7.4, 3.8), constrained_layout=True)
+    ax.axhline(ION_HEIGHT_M * 1e6, color="#bbbbbb", lw=0.8, zorder=0)
+    for label, design, style in designs:
+        distance_um, height_um = _height_profile(design)
+        ax.plot(distance_um, height_um, label=label, **style)
+    ax.set_xlabel("distance along the path (μm)")
+    ax.set_ylabel("height (μm)")
+    ax.set_title("height through transport")
+    ax.set_xlim(left=0.0)
+    ax.legend(frameon=False, fontsize=8)
     fig.savefig(out, dpi=140)
     plt.close(fig)
 
