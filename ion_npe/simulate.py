@@ -145,3 +145,39 @@ def total_heating(quanta):
     """Mean over noise seeds of the sum of the three final quanta."""
     summed = np.sum(np.asarray(quanta, dtype=float), axis=-1)
     return np.mean(summed, axis=-1)
+
+
+def _simulate_vector(payload):
+    """One design vector. Imported names stay local so worker processes start cleanly."""
+    vector, seeds, simulate_kwargs = payload
+    from .design import DesignSpace
+
+    design = DesignSpace().unpack(vector)
+    return simulate_design(design, seeds=seeds, **simulate_kwargs)
+
+
+def simulate_vectors(vectors, seeds, workers=1, **simulate_kwargs):
+    """Simulate design vectors in sample order.
+
+    Inside a step from ``scripts/mehta.sbatch``, the SLURM tasks split the
+    batch. Otherwise ``workers`` above 1 gives each design its own process.
+    Results stay in the same order as ``vectors``.
+    """
+    from .parallel import in_step, map_designs
+
+    vectors = [np.asarray(vector, dtype=float) for vector in vectors]
+    if in_step() and len(vectors) > 1:
+        return map_designs(vectors, seeds, simulate_kwargs)
+    payloads = [
+        (vector, tuple(int(seed) for seed in seeds), dict(simulate_kwargs))
+        for vector in vectors
+    ]
+    if len(payloads) <= 1 or int(workers) <= 1:
+        return [_simulate_vector(item) for item in payloads]
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+
+    n_workers = min(int(workers), len(payloads))
+    context = multiprocessing.get_context("fork")
+    with ProcessPoolExecutor(max_workers=n_workers, mp_context=context) as pool:
+        return list(pool.map(_simulate_vector, payloads))

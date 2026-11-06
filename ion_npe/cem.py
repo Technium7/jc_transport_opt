@@ -10,7 +10,7 @@ import numpy as np
 
 from .dataset import Dataset, design_is_admissible
 from .design import BoxGaussian
-from .simulate import simulate_design, total_heating
+from .simulate import simulate_vectors, total_heating
 from .train import finetune
 
 
@@ -40,6 +40,7 @@ def cooptimize(
     lbfgs_maxiter=0,
     noise_samples=8,
     std_floor=0.05,
+    workers=1,
     simulate_kwargs=None,
 ):
     """Co-optimize the junction and the trajectory.
@@ -87,12 +88,13 @@ def cooptimize(
             ),
             flush=True,
         )
-        for index in chosen:
-            result = simulate_design(
-                space.unpack(candidates[index]),
-                seeds=dataset.seeds,
-                **simulate_kwargs,
-            )
+        results = simulate_vectors(
+            candidates[chosen],
+            seeds=dataset.seeds,
+            workers=workers,
+            **simulate_kwargs,
+        )
+        for index, result in zip(chosen, results):
             if not result.ok:
                 print("  skip: {}".format(result.message), flush=True)
                 continue

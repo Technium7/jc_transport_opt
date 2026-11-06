@@ -105,6 +105,13 @@ def _latin_rows(rng, n, center, lo, hi, free):
     return rows
 
 
+def _simulate_prepared(prepared, simulate_kwargs):
+    """Run the prepared rows. A parallel step gives each task its own share."""
+    from .parallel import map_joint
+
+    return map_joint(prepared, simulate_kwargs)
+
+
 def _collect_slice(rng, n, center, lo, hi, free, space, simulate_kwargs, label):
     rows = []
     quanta = []
@@ -117,15 +124,20 @@ def _collect_slice(rng, n, center, lo, hi, free, space, simulate_kwargs, label):
     while len(rows) < target and tries < cap:
         tries += 1
         batch = _latin_rows(rng, max((target - len(rows)) * 2, 16), center, lo, hi, free)
+        prepared = []
         for row in batch:
+            item = project_joint_row(row)
+            if _admissible(_unpack(space, item)):
+                prepared.append(item)
+        if not prepared:
+            continue
+        for result, item in zip(_simulate_prepared(prepared, simulate_kwargs), prepared):
             if len(rows) >= target:
                 break
-            prepared = project_joint_row(row)
-            result = _simulate_row(space, prepared, simulate_kwargs)
             if result is None:
                 continue
             heating = float(total_heating(result.quanta))
-            rows.append(prepared)
+            rows.append(item)
             quanta.append(np.asarray(result.quanta, dtype=float))
             totals.append(heating)
             if len(rows) == 1 or len(rows) % 50 == 0 or len(rows) == target:

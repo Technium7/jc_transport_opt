@@ -13,6 +13,7 @@ The dynamics are the developed symplectic integrator. The RF pseudopotential com
 | `ion_npe/trajectory.py` | Round-trip path. Bend controls are `(x, y, z)`, denser near the junction |
 | `ion_npe/dynamics.py` | Path frame, stray field, velocity Verlet |
 | `ion_npe/simulate.py` | One design in, final quanta out |
+| `ion_npe/parallel.py` | Split a simulation batch across SLURM tasks |
 | `ion_npe/dataset.py` | Collection of simulated designs |
 | `ion_npe/model.py` | Deterministic MLP and stochastic network |
 | `ion_npe/train.py` | Adam, then L-BFGS |
@@ -25,18 +26,26 @@ The design vector is the eight junction controls `ai, da, bi_x, bi_y, bo_x, bo_y
 
 ## Run
 
-Use the `trapsim` environment, which has the `electrode` package:
+Use a Python environment that has the NIST `electrode` package. On the cluster that environment is the project virtualenv:
 
 ```bash
-cd "/Users/JackX/Desktop/2026-2027/CS 6786/Project"
-/opt/anaconda3/envs/trapsim/bin/python -m unittest discover -s tests
-/opt/anaconda3/envs/trapsim/bin/python -m ion_npe simulate --out outputs/nominal.png
-/opt/anaconda3/envs/trapsim/bin/python -m ion_npe collect -n 40 --seeds 0 1 2 3 -o data/train.npz
-/opt/anaconda3/envs/trapsim/bin/python -m ion_npe train -d data/train.npz -o data/models
-/opt/anaconda3/envs/trapsim/bin/python -m ion_npe optimize -d data/train.npz -m data/models/stochastic.npz
-/opt/anaconda3/envs/trapsim/bin/python -m ion_npe study -o outputs/study
-/opt/anaconda3/envs/trapsim/bin/python -m ion_npe demo
+cd /share/mehta/zx296/jc_transport_opt
+.venv/bin/python -m unittest discover -s tests
+.venv/bin/python -m ion_npe simulate --out outputs/nominal.png
+.venv/bin/python -m ion_npe collect -n 40 --seeds 0 1 2 3 --workers 8 -o data/train.npz
+.venv/bin/python -m ion_npe train -d data/train.npz -o data/models
+.venv/bin/python -m ion_npe optimize -d data/train.npz -m data/models/stochastic.npz --workers 8
+.venv/bin/python -m ion_npe study -o outputs/study
+.venv/bin/python -m ion_npe demo
 ```
+
+On the cluster, submit the same command as 12 tasks on the mehta node. The allocation is 48 GB and 8 hours. Rank 0 runs the command and trains. Each task simulates its own share of a collection batch:
+
+```bash
+sbatch scripts/mehta.sbatch nearby -o outputs/electrodes --noise 0 --seeds 0 -n 2000 --per-round 1000 --iterations 3 --epochs 40 --lbfgs 15
+```
+
+`--workers` is the local process pool, used when the command is not inside that step. The saved designs match a serial run with the same `--seed` when the cover is random. Training stays on rank 0: Adam, then full-batch L-BFGS.
 
 `study` turns the stray field off. It fills a fine neighborhood of the nominal path with a Latin hypercube, and fills the wider junction and trajectory range with a second, larger hypercube. Height and crossing stay inside the 10 μm caps. It holds some designs out and reports log10 RMSE, Gaussian NLL, and one-standard-deviation coverage for Adam and for Adam followed by L-BFGS. Active rounds then screen another space-filling pool and simulate the low-phonon designs where the network is most uncertain. `--fine` and `-n` set the two sample counts. `--iterations` is the number of active rounds.
 

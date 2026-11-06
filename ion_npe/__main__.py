@@ -11,6 +11,10 @@ From the project directory, with the trapsim environment:
     python -m ion_npe nearby -o outputs/nearby
     python -m ion_npe schedule -o outputs/schedule
     python -m ion_npe demo
+
+On the cluster, submit the same command with scripts/mehta.sbatch.
+That runs 12 tasks on the mehta node. Rank 0 trains. The tasks split
+each simulation batch.
 """
 
 import argparse
@@ -105,6 +109,8 @@ def _cmd_collect(args):
         seeds=tuple(args.seeds),
         fraction=args.fraction,
         seed=args.seed,
+        workers=args.workers,
+        design=args.cover,
         **_physics(args),
     )
     dataset.save(args.out)
@@ -165,6 +171,7 @@ def _cmd_optimize(args):
         finetune_epochs=args.finetune_epochs,
         lbfgs_maxiter=args.lbfgs,
         noise_samples=args.noise_samples,
+        workers=args.workers,
         simulate_kwargs=_physics(args),
     )
     out = Path(args.out)
@@ -189,6 +196,8 @@ def _cmd_demo(args):
 
 
 def _cmd_nearby(args):
+    physics = _physics(args)
+    physics["seeds"] = tuple(args.seeds)
     optimize_local(
         args.out,
         n=args.n,
@@ -197,7 +206,7 @@ def _cmd_nearby(args):
         epochs=args.epochs,
         lbfgs_maxiter=args.lbfgs,
         seed=args.seed,
-        simulate_kwargs=_physics(args),
+        simulate_kwargs=physics,
         cooptimize=args.cooptimize,
         warm_start=args.warm or None,
     )
@@ -257,6 +266,12 @@ def _cmd_study(args):
 
 
 def main(argv=None):
+    from .parallel import guard
+
+    guard(lambda: _main(argv))
+
+
+def _main(argv=None):
     parser = argparse.ArgumentParser(prog="ion_npe", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -275,7 +290,9 @@ def main(argv=None):
     collect.add_argument("-n", type=int, default=24)
     collect.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2, 3])
     collect.add_argument("--fraction", type=float, default=0.5, help="box width about the nominal design, 0 to 1")
+    collect.add_argument("--cover", choices=("random", "latin"), default="random", help="how the design box is filled")
     collect.add_argument("--seed", type=int, default=0)
+    collect.add_argument("--workers", type=int, default=1, help="designs simulated at once")
     collect.add_argument("-o", "--out", type=str, default="data/train.npz")
     collect.set_defaults(func=_cmd_collect)
 
@@ -305,6 +322,7 @@ def main(argv=None):
     opt.add_argument("--lbfgs", type=int, default=40, help="L-BFGS iterations after each Adam stage")
     opt.add_argument("--finetune-epochs", type=int, default=30)
     opt.add_argument("--noise-samples", type=int, default=8)
+    opt.add_argument("--workers", type=int, default=1, help="designs simulated at once in each round")
     opt.add_argument("--seed", type=int, default=0)
     opt.set_defaults(func=_cmd_optimize)
 
@@ -382,6 +400,7 @@ def main(argv=None):
     nearby.add_argument("--epochs", type=int, default=40)
     nearby.add_argument("--lbfgs", type=int, default=15)
     nearby.add_argument("--seed", type=int, default=0)
+    nearby.add_argument("--seeds", type=int, nargs="+", default=[0], help="stray-field seeds for each design")
     nearby.add_argument(
         "--cooptimize", action="store_true",
         help="search the junction, the trajectory, and the waveform; each may be updated or kept",

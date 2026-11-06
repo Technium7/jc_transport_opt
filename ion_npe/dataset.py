@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from .design import DesignSpace, within_transport_caps
-from .simulate import simulate_design, total_heating
+from .simulate import simulate_vectors, total_heating
 from .trajectory import controls_stay_ordered, height_within_cap
 
 
@@ -107,6 +107,18 @@ class Dataset:
         )
 
 
+def _draw_proposal(space, rng, cover, fraction, cap_fraction, queue, remaining):
+    """Next design vector. ``queue`` holds a Latin-hypercube batch."""
+    if cover == "latin":
+        if not queue:
+            queue.extend(space.sample_latin(
+                rng, max(int(remaining) * 2, 8),
+                fraction=fraction, cap_fraction=cap_fraction,
+            ))
+        return queue.pop(0)
+    return space.sample(rng, 1, fraction=fraction, cap_fraction=cap_fraction)[0]
+
+
 def collect_dataset(
     n,
     seeds=(0, 1, 2, 3),
@@ -116,6 +128,7 @@ def collect_dataset(
     space=None,
     max_attempts_factor=12,
     design="random",
+    workers=1,
     **simulate_kwargs,
 ):
     """Simulate designs until ``n`` of them confine and finish.
@@ -125,11 +138,19 @@ def collect_dataset(
     A design is skipped when the crossing is farther than 10 um, the ion
     leaves the 50 um height by more than 10 um, the bend polygon folds, or
     the RF curvature does not confine.
+
+    ``workers`` above 1 simulates that many admissible designs at once.
+    A ``scripts/mehta.sbatch`` step uses its task count instead.
+    Successes are kept in sample order, so the saved rows match a serial run
+    with the same seed.
     """
+    from .parallel import active_workers, in_step
+
     if design not in ("random", "latin"):
         raise ValueError("design must be random or latin")
     space = space if space is not None else DesignSpace()
     seeds = [int(item) for item in seeds]
+    workers = max(int(workers), 1)
     rng = np.random.default_rng(seed)
     rows = []
     quanta = []
@@ -139,46 +160,58 @@ def collect_dataset(
     attempts = 0
     limit = max(int(n) * int(max_attempts_factor), int(n))
     queue = []
+    width = active_workers(workers)
     print(
-        "collecting {} designs, {} noise seeds, {} cover, fraction {:.2f}, caps 10 um".format(
-            n, len(seeds), design, fraction
+        "collecting {} designs, {} noise seeds, {} cover, fraction {:.2f}, caps 10 um, workers {}".format(
+            n, len(seeds), design, fraction, width
         ),
         flush=True,
     )
     while len(rows) < n and attempts < limit:
-        if design == "latin":
-            if not queue:
-                queue = list(space.sample_latin(
-                    rng, max((n - len(rows)) * 2, 8),
-                    fraction=fraction, cap_fraction=cap_fraction,
-                ))
-            proposal = queue.pop(0)
+        batch = []
+        batch_attempts = []
+        if in_step():
+            batch_size = min(width * 4, n - len(rows))
         else:
-            proposal = space.sample(rng, 1, fraction=fraction, cap_fraction=cap_fraction)[0]
-        attempts += 1
-        design = space.unpack(proposal)
-        if not design_is_admissible(design):
-            print("  skip {:3d}: outside the 10 um caps or the bend folds".format(attempts), flush=True)
-            continue
-        result = simulate_design(design, seeds=seeds, **simulate_kwargs)
-        if not result.ok:
-            print("  skip {:3d}: {}".format(attempts, result.message), flush=True)
-            continue
-        rows.append(proposal)
-        quanta.append(result.quanta)
-        if np.isfinite(result.quanta_ideal).all():
-            ideal.append(result.quanta_ideal)
-        else:
-            ideal.append(np.full_like(result.quanta, np.nan))
-        lengths.append(result.length_m)
-        durations.append(result.duration_s)
-        heating = float(total_heating(result.quanta))
-        print(
-            "  {:3d}/{}  heating {:.4g}  ({:.1f} to {:.1f} MHz)".format(
-                len(rows), n, heating, result.f_trans_MHz[0], result.f_trans_MHz[1]
-            ),
-            flush=True,
-        )
+            batch_size = 1 if width == 1 else min(width, n - len(rows))
+        while len(batch) < batch_size and attempts < limit:
+            proposal = _draw_proposal(
+                space, rng, design, fraction, cap_fraction, queue, n - len(rows)
+            )
+            attempts += 1
+            unpacked = space.unpack(proposal)
+            if not design_is_admissible(unpacked):
+                print(
+                    "  skip {:3d}: outside the 10 um caps or the bend folds".format(attempts),
+                    flush=True,
+                )
+                continue
+            batch.append(proposal)
+            batch_attempts.append(attempts)
+        if not batch:
+            break
+        results = simulate_vectors(batch, seeds, workers=workers, **simulate_kwargs)
+        for proposal, attempt, result in zip(batch, batch_attempts, results):
+            if len(rows) >= n:
+                break
+            if not result.ok:
+                print("  skip {:3d}: {}".format(attempt, result.message), flush=True)
+                continue
+            rows.append(proposal)
+            quanta.append(result.quanta)
+            if np.isfinite(result.quanta_ideal).all():
+                ideal.append(result.quanta_ideal)
+            else:
+                ideal.append(np.full_like(result.quanta, np.nan))
+            lengths.append(result.length_m)
+            durations.append(result.duration_s)
+            heating = float(total_heating(result.quanta))
+            print(
+                "  {:3d}/{}  heating {:.4g}  ({:.1f} to {:.1f} MHz)".format(
+                    len(rows), n, heating, result.f_trans_MHz[0], result.f_trans_MHz[1]
+                ),
+                flush=True,
+            )
     if len(rows) < n:
         raise RuntimeError(
             "collected {} of {} designs after {} attempts".format(len(rows), n, attempts)
