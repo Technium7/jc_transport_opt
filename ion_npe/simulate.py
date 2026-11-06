@@ -1,9 +1,9 @@
 """Integrate one junction and one three-dimensional trajectory.
 
-The ion moves in the RF pseudopotential of the junction and in a target DC
-well along the design path. The DC well is not taken from a solved electrode
-voltage set. It is the target harmonic well, held for 100 ns. The stray field
-is off unless ``noise_std_Vm`` is set.
+The ion moves in the RF pseudopotential and in the field of a DC voltage set.
+The voltages are least squares for the target well, held for 100 ns, and the
+field is evaluated at the ion. The ideal comparison is still the target
+harmonic well. The stray field is off unless ``noise_std_Vm`` is set.
 """
 
 from dataclasses import dataclass
@@ -18,7 +18,8 @@ from .constants import (
     TRANSPORT_SPEED_M_S,
     VOLTAGE_UPDATE_S,
 )
-from .dynamics import hold_steps, integrate, path_directions, path_frame_noise
+from .control import electrode_acceleration, solve_transport_voltages
+from .dynamics import hold_steps, integrate, integrate_acceleration, path_directions, path_frame_noise
 from .junction import build_junction, path_frequencies
 from .trajectory import dynamics_grid
 
@@ -103,8 +104,9 @@ def simulate_design(
     """Final motional quanta for ``design``.
 
     ``seeds`` each draw an independent stray field. With ``noise_std_Vm`` 0
-    the field is omitted and one trajectory is integrated. ``with_ideal``
-    also integrates the well that follows the path at every step.
+    the field is omitted and one trajectory is integrated. The force is the
+    electrode field of the solved voltages. ``with_ideal`` also integrates
+    the harmonic well that follows the path at every step.
     """
     try:
         sampled = dynamics_grid(design, speed_m_s, L_SCALE, sim_dt)
@@ -114,6 +116,14 @@ def simulate_design(
         directions = path_directions(xyz)
         r0 = xyz * L_SCALE
         n_hold = hold_steps(voltage_update_s, sim_dt)
+        solved = solve_transport_voltages(junction, xyz, omega2, directions, n_hold)
+
+        def acceleration(position, hold):
+            slot = min(hold // n_hold, len(solved.voltages) - 1)
+            return electrode_acceleration(
+                junction, solved.voltages[slot], solved.scale, position
+            )
+
         amplitude = float(noise_std_Vm)
         if amplitude < 0.0:
             raise ValueError("noise amplitude must be non-negative")
@@ -134,8 +144,8 @@ def simulate_design(
             if amplitude == 0.0 and quiet is not None:
                 physical = quiet
             else:
-                physical = integrate(
-                    r0, omega2, directions, n_hold=n_hold, sim_dt=sim_dt, e_path=e_path
+                physical = integrate_acceleration(
+                    r0, omega2, directions, n_hold, acceleration, sim_dt=sim_dt, e_path=e_path
                 )
                 if amplitude == 0.0:
                     quiet = physical
