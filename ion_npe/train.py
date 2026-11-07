@@ -55,6 +55,10 @@ def train_predictor(
         logs = logs[:, None, :]
     if logs.ndim != 3 or logs.shape[-1] != 3:
         raise ValueError("quanta must have shape (N, S, 3)")
+    if kind == "stochastic" and logs.shape[1] < 2:
+        raise ValueError(
+            "stochastic training needs at least two stray-field samples per design"
+        )
     if len(x) != len(logs):
         raise ValueError("designs and quanta have different lengths")
     if len(x) < 2:

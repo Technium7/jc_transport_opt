@@ -172,3 +172,56 @@ def integrate(r0, omega2, directions, n_hold, sim_dt=SIM_DT, e_path=None, r_init
         "peak_quanta": peak,
         "final_offset_um": (pos - r0[-1]) * 1e6,
     }
+
+
+def integrate_acceleration(
+    r0, omega2, directions, n_hold, acceleration, sim_dt=SIM_DT, e_path=None, r_init=None, v_init=None,
+):
+    """Velocity Verlet driven by ``acceleration(position_m, hold_index)``.
+
+    ``hold_index`` is the path sample whose voltage set is held, the same
+    schedule as ``integrate``. Quanta are still measured about the continuous
+    design path. ``e_path`` is an extra field in V/m in that frame.
+    """
+    r0 = np.asarray(r0, dtype=float)
+    omega2 = np.asarray(omega2, dtype=float)
+    directions = np.asarray(directions, dtype=float)
+    n_steps = len(r0) - 1
+    if n_steps < 1:
+        raise ValueError("path needs at least two samples")
+    n_hold = max(int(n_hold), 1)
+    v_raw = np.gradient(r0, sim_dt, axis=0)
+    v_path = v_raw.copy()
+    v_path[0] = 0.0
+    v_path[-1] = 0.0
+    a_noise = _noise_accel(directions, e_path)
+
+    def acc_at(pos, step):
+        hold = min((step // n_hold) * n_hold, n_steps)
+        acc = np.asarray(acceleration(pos, hold), dtype=float).reshape(3)
+        if a_noise is not None:
+            acc = acc + a_noise[step]
+        return acc
+
+    pos = r0[0].copy() if r_init is None else np.asarray(r_init, dtype=float).copy()
+    vel = np.zeros(3) if v_init is None else np.asarray(v_init, dtype=float).copy()
+    acc = acc_at(pos, 0)
+    stride = max(n_steps // 2000, 1)
+    peak = np.zeros(3)
+    final = np.zeros(3)
+    for i in range(n_steps):
+        vel_half = vel + 0.5 * sim_dt * acc
+        pos = pos + sim_dt * vel_half
+        step = i + 1
+        acc = acc_at(pos, step)
+        vel = vel_half + 0.5 * sim_dt * acc
+        if step % stride == 0 or step == n_steps:
+            q = _quanta(pos, vel, r0[step], v_path[step], directions[step], omega2[step])
+            peak = np.maximum(peak, q)
+            if step == n_steps:
+                final = q
+    return {
+        "final_quanta": final,
+        "peak_quanta": peak,
+        "final_offset_um": (pos - r0[-1]) * 1e6,
+    }

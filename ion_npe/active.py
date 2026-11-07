@@ -9,7 +9,7 @@ import numpy as np
 
 from .dataset import design_is_admissible
 from .design import BoxGaussian
-from .simulate import simulate_design, total_heating
+from .simulate import total_heating
 
 
 def _zscore(values):
@@ -89,13 +89,21 @@ def acquire(
     durations = []
     predicted = []
     uncertainty = []
-    for index in chosen:
-        design = space.unpack(candidates[index])
-        result = simulate_design(design, seeds=seeds, **simulate_kwargs)
-        if not result.ok:
-            print("  skip: {}".format(result.message), flush=True)
+    if chosen:
+        from .farm import get_farm
+
+        call_kwargs = dict(simulate_kwargs)
+        call_kwargs["seeds"] = [int(item) for item in seeds]
+        packed = get_farm().simulate(
+            "design", candidates[np.asarray(chosen, dtype=int)], call_kwargs,
+        )
+    else:
+        packed = []
+    for index, result in zip(chosen, packed):
+        if not result["ok"]:
+            print("  skip: {}".format(result["message"]), flush=True)
             continue
-        heating = float(total_heating(result.quanta))
+        heating = float(total_heating(result["quanta"]))
         print(
             "  acquired heating {:.4g}  predicted {:.4g} ± {:.4g}".format(
                 heating, pred["total_mean"][index], pred["total_std"][index]
@@ -103,9 +111,9 @@ def acquire(
             flush=True,
         )
         rows.append(candidates[index])
-        quanta.append(result.quanta)
-        lengths.append(result.length_m)
-        durations.append(result.duration_s)
+        quanta.append(result["quanta"])
+        lengths.append(result["length_m"])
+        durations.append(result["duration_s"])
         predicted.append(float(pred["total_mean"][index]))
         uncertainty.append(float(pred["total_std"][index]))
     record = {

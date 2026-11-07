@@ -18,7 +18,7 @@ from .design import DesignSpace
 from .joint import (
     N_GATES, _admissible, _bounds, _location, _shifts, _simulate_row, _unpack, project_joint_row,
 )
-from .simulate import total_heating
+from .simulate import simulation_settings, stray_field_line, total_heating
 from .train import log_rmse, train_predictor
 
 MIN_TRAIN = 1000
@@ -105,14 +105,10 @@ def _latin_rows(rng, n, center, lo, hi, free):
     return rows
 
 
-def _simulate_prepared(prepared, simulate_kwargs):
-    """Run the prepared rows. A parallel step gives each task its own share."""
-    from .parallel import map_joint
-
-    return map_joint(prepared, simulate_kwargs)
-
-
 def _collect_slice(rng, n, center, lo, hi, free, space, simulate_kwargs, label):
+    from .farm import get_farm, width_for
+
+    farm = get_farm()
     rows = []
     quanta = []
     totals = []
@@ -124,27 +120,36 @@ def _collect_slice(rng, n, center, lo, hi, free, space, simulate_kwargs, label):
     while len(rows) < target and tries < cap:
         tries += 1
         batch = _latin_rows(rng, max((target - len(rows)) * 2, 16), center, lo, hi, free)
-        prepared = []
+        prepared_batch = []
         for row in batch:
-            item = project_joint_row(row)
-            if _admissible(_unpack(space, item)):
-                prepared.append(item)
-        if not prepared:
-            continue
-        for result, item in zip(_simulate_prepared(prepared, simulate_kwargs), prepared):
-            if len(rows) >= target:
+            prepared = project_joint_row(row)
+            if _admissible(_unpack(space, prepared)):
+                prepared_batch.append(prepared)
+        cursor = 0
+        while cursor < len(prepared_batch) and len(rows) < target:
+            need = target - len(rows)
+            take = width_for(need, farm.size)
+            chunk = prepared_batch[cursor:cursor + take]
+            cursor += len(chunk)
+            if len(chunk) == 0:
                 break
-            if result is None:
-                continue
-            heating = float(total_heating(result.quanta))
-            rows.append(item)
-            quanta.append(np.asarray(result.quanta, dtype=float))
-            totals.append(heating)
-            if len(rows) == 1 or len(rows) % 50 == 0 or len(rows) == target:
-                print(
-                    "  {} {:4d}/{}  heating {:.4g}".format(label, len(rows), target, heating),
-                    flush=True,
-                )
+            packed = farm.simulate("joint", np.vstack(chunk), simulate_kwargs)
+            for prepared, result in zip(chunk, packed):
+                if len(rows) >= target:
+                    break
+                if not result["ok"]:
+                    if result["message"]:
+                        print("  skip: {}".format(result["message"]), flush=True)
+                    continue
+                heating = float(total_heating(result["quanta"]))
+                rows.append(prepared)
+                quanta.append(np.asarray(result["quanta"], dtype=float))
+                totals.append(heating)
+                if len(rows) == 1 or len(rows) % 50 == 0 or len(rows) == target:
+                    print(
+                        "  {} {:4d}/{}  heating {:.4g}".format(label, len(rows), target, heating),
+                        flush=True,
+                    )
     if len(rows) < target:
         raise RuntimeError("could not simulate {} {} designs".format(target, label))
     return rows, quanta, totals
@@ -163,13 +168,17 @@ def _stack(rows, quanta, totals, origin, new_rows, new_q, new_total, tag):
 
 
 def _save(path, rows, quanta, totals, origin, next_round, center, proposal_round=-1,
-          proposal_center=None, proposal_half=None, active_center=None, active_half=None):
+          proposal_center=None, proposal_half=None, active_center=None, active_half=None,
+          seeds=None):
+    if seeds is None:
+        raise ValueError("noise seeds were not recorded")
     center = np.asarray(center, dtype=float)
     np.savez(
         path,
         rows=rows,
         quanta=quanta,
         totals=totals,
+        seeds=np.asarray(seeds, dtype=int),
         origin=np.asarray(origin, dtype="U24"),
         next_round=np.int64(next_round),
         center=center,
@@ -185,9 +194,15 @@ def _load(path):
     data = np.load(path)
     center = np.asarray(data["center"], dtype=float)
     proposal_round = int(np.asarray(data["proposal_round"])) if "proposal_round" in data.files else -1
+    quanta = np.asarray(data["quanta"], dtype=float)
+    if "seeds" in data.files:
+        saved_seeds = np.asarray(data["seeds"], dtype=int)
+    else:
+        n_saved = quanta.shape[1] if quanta.ndim == 3 else 1
+        saved_seeds = np.arange(n_saved)
     return (
         np.asarray(data["rows"], dtype=float),
-        np.asarray(data["quanta"], dtype=float),
+        quanta,
         np.asarray(data["totals"], dtype=float),
         np.asarray(data["origin"]).astype(str),
         int(np.asarray(data["next_round"])),
@@ -197,6 +212,7 @@ def _load(path):
         np.asarray(data["proposal_half"], dtype=float) if "proposal_half" in data.files else np.zeros_like(center),
         np.asarray(data["active_center"], dtype=float) if "active_center" in data.files else center,
         np.asarray(data["active_half"], dtype=float) if "active_half" in data.files else np.zeros_like(center),
+        saved_seeds,
     )
 
 
@@ -308,9 +324,8 @@ def optimize_local(
         raise ValueError("each optimization step needs at least {} new designs".format(MIN_TRAIN))
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    simulate_kwargs = dict(simulate_kwargs or {})
-    simulate_kwargs.setdefault("seeds", (0,))
-    simulate_kwargs.setdefault("noise_std_Vm", 0.0)
+    simulate_kwargs = simulation_settings(simulate_kwargs)
+    seeds = simulate_kwargs["seeds"]
     space = DesignSpace()
     lower, upper = _bounds(space)
     nominal = np.concatenate([space.nominal(), np.zeros(N_GATES)])
@@ -326,14 +341,21 @@ def optimize_local(
     if cache.exists():
         (
             rows, quanta, totals, origin, next_round, center, proposal_round,
-            proposal_center, proposal_half, active_center, active_half,
+            proposal_center, proposal_half, active_center, active_half, saved_seeds,
         ) = _load(cache)
+        if tuple(int(item) for item in saved_seeds) != tuple(seeds):
+            raise RuntimeError(
+                "saved designs used noise seeds {}; this run uses {}".format(
+                    tuple(int(item) for item in saved_seeds), tuple(seeds)
+                )
+            )
         print(
             "resuming with {} designs, next round {}".format(len(rows), next_round),
             flush=True,
         )
     else:
         print("nominal path, nominal waveform", flush=True)
+        print("  {}".format(stray_field_line(simulate_kwargs)), flush=True)
         nominal_result = _simulate_row(space, nominal, simulate_kwargs)
         if nominal_result is None:
             raise RuntimeError("nominal design is not admissible")
@@ -345,7 +367,7 @@ def optimize_local(
         origin = np.array(["nominal"], dtype="U24")
         center = nominal.copy()
         next_round = 0
-        _save(cache, rows, quanta, totals, origin, next_round, center)
+        _save(cache, rows, quanta, totals, origin, next_round, center, seeds=seeds)
 
     if next_round == 0 and warm_start and not np.any(origin == "reference"):
         print("reference design from {}".format(warm_start), flush=True)
@@ -359,7 +381,7 @@ def optimize_local(
             rows, quanta, totals, origin, [reference], [reference_result.quanta], [heating], "reference",
         )
         center = reference
-        _save(cache, rows, quanta, totals, origin, next_round, center)
+        _save(cache, rows, quanta, totals, origin, next_round, center, seeds=seeds)
 
     if next_round == 0:
         where = "the warm-start design" if warm_start else "the nominal path"
@@ -372,7 +394,7 @@ def optimize_local(
             flush=True,
         )
         def _checkpoint(rows, quanta, totals, origin):
-            _save(cache, rows, quanta, totals, origin, 0, center)
+            _save(cache, rows, quanta, totals, origin, 0, center, seeds=seeds)
 
         rows, quanta, totals, origin = _collect_neighborhood(
             rng, _split_counts(n), center, initial_half, lower, upper, space,
@@ -380,7 +402,7 @@ def optimize_local(
         )
         next_round = 1
         center = nominal.copy()
-        _save(cache, rows, quanta, totals, origin, next_round, center)
+        _save(cache, rows, quanta, totals, origin, next_round, center, seeds=seeds)
         print(
             "  collected {}  best {:.4g}  {}".format(
                 len(rows), float(np.min(totals)), _slice_bests(origin, totals)
@@ -401,7 +423,7 @@ def optimize_local(
             proposal_round = step
             _save(
                 cache, rows, quanta, totals, origin, step, center, proposal_round,
-                proposal_center, proposal_half, active_center, active_half,
+                proposal_center, proposal_half, active_center, active_half, seeds=seeds,
             )
         print(
             "round {}  best so far {:.4g}  collecting {} nearby and in the uncertain region".format(
@@ -415,7 +437,7 @@ def optimize_local(
         def _checkpoint(rows, quanta, totals, origin, step=step):
             _save(
                 cache, rows, quanta, totals, origin, step, proposal_center, step,
-                proposal_center, proposal_half, active_center, active_half,
+                proposal_center, proposal_half, active_center, active_half, seeds=seeds,
             )
 
         rows, quanta, totals, origin = _collect_neighborhood(
@@ -434,7 +456,7 @@ def optimize_local(
             )
         next_round = step + 1
         proposal_round = -1
-        _save(cache, rows, quanta, totals, origin, next_round, proposal_center)
+        _save(cache, rows, quanta, totals, origin, next_round, proposal_center, seeds=seeds)
         print(
             "  collected {}  best {:.4g}  {}".format(
                 len(rows), float(np.min(totals)), _slice_bests(origin, totals)
@@ -471,7 +493,7 @@ def optimize_local(
     lines = [
         "junction, trajectory, and waveform, each updated or kept"
         if cooptimize else "local search starting at the nominal path",
-        "stray field: off",
+        stray_field_line(simulate_kwargs),
         "start and end height: 50 um",
         "designs simulated: {}".format(len(totals)),
         "waveform samples: {}".format(wave_n),
@@ -496,8 +518,11 @@ def optimize_local(
             "{:.6g}".format(active_best) if active_best is not None else "none"
         ),
         "best total quanta: {:.6g}".format(float(totals[best_i])),
-        "best quanta: {}".format(
-            " ".join("{:.6g}".format(float(v)) for v in quanta[best_i].reshape(-1))
+        "best mean quanta: {}".format(
+            " ".join("{:.6g}".format(float(v)) for v in np.mean(quanta[best_i], axis=0))
+        ),
+        "best total std across samples: {:.6g}".format(
+            float(np.std(np.sum(quanta[best_i], axis=-1)))
         ),
         "best origin: {}".format(str(origin[best_i])),
         "junction shift from nominal, unit norm: {:.4g}".format(junction_shift),

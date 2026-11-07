@@ -52,3 +52,28 @@ sbatch scripts/mehta.sbatch nearby -o outputs/electrodes --noise 0 --seeds 0 -n 
 `demo` is a short pipeline check. A real fit is `study`, or `collect` followed by `train` and `optimize`. `--lbfgs` is the number of L-BFGS iterations after Adam.
 
 `--voltage-ns` defaults to 100. `--noise` defaults to 0, which turns the stray field off. A positive value is the standard deviation, in V/m, of the stray-field maximum on each path-frame axis. The figure from `simulate --out` draws the bend control points on the path.
+
+## G2 cluster
+
+Collection and the simulations inside the search run on every task of one Slurm allocation. Training stays on one task: the network is small, and the time is in the ion dynamics. Rank 0 proposes the designs, writes a batch on the shared project directory, and every node integrates its slice.
+
+The default request matches an interactive mehta shell, repeated across 10 nodes:
+
+```bash
+srun --mem=4G --time=8:00:00 -n 1 -p mehta --pty /bin/bash
+```
+
+Slurm's `--mem` is per node, so 10 nodes at 4G is 40G. The account cap is 16 nodes and 128G total, which is 16 nodes at 8G. Do not multiply those together past 128G.
+
+From the project directory on a G2 login node, after `mkdir -p logs` and setting `ION_PYTHON` in `cluster/env.sh` to the trapsim interpreter:
+
+```bash
+sbatch cluster/pipeline.sbatch
+sbatch cluster/run.sbatch study -o outputs/study
+sbatch cluster/run.sbatch joint -o outputs/joint
+sbatch cluster/run.sbatch nearby -o outputs/nearby
+sbatch --nodes=1 --ntasks=1 cluster/run.sbatch train -d data/train.npz -o data/models
+sbatch --nodes=16 --ntasks=16 --mem=8G cluster/run.sbatch joint -o outputs/joint
+```
+
+`pipeline.sbatch` collects 400 designs, trains, then runs the cross-entropy search. `N_COLLECT`, `EPOCHS`, `LBFGS`, and `ITERS` override those counts. `study`, `joint`, and `nearby` already combine collection, training, and search, so each is one `run.sbatch` job.
