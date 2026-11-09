@@ -1,11 +1,11 @@
 """Junction and trajectory design vector.
 
-The search coordinates are the eight symmetric Y-junction controls, one bend
-radius, the heights of the developed bend control points, and the ``(a, b)``
-time profile. Those control points keep their developed ``(x, y)``. The arm,
-the bend entrance, the crossing height, and the crossing distance stay at the
-developed path. The shared radius and each height stay within 15 um of the
-RF center.
+The search coordinates are the eight symmetric Y-junction controls, the bend
+radius ``cross_s``, the heights of the bend controls, and the ``(a, b)``
+time profile. ``cross_s`` fixes the bend ``(x, y)``. Those coordinates are
+not separate search parameters. ``cross_s`` stays within 15 um of the RF
+center, and each height stays within 15 um of 50 um. The arm stays on the
+developed path.
 """
 
 from dataclasses import dataclass, field
@@ -17,7 +17,6 @@ from .constants import (
     HEIGHT_CAP_M,
     ION_HEIGHT,
     L_SCALE,
-    RADIUS_CAP_M,
 )
 
 # Fixed arm controls. They are not free parameters; the path still uses them.
@@ -29,10 +28,9 @@ _ARM = (
 )
 N_ARM = len(_ARM)
 
-# Developed bend controls. They pack tighter near the junction. ``bend_r``
-# scales this bow; the nominal radius reproduces these points. Each point
-# still has its own height.
-_INTERIOR_XY = np.array([
+# Stations of the developed bend, used only to keep the same sample spacing.
+# The coordinates themselves are rebuilt from the tangent-matched curve.
+_DEVELOPED_STATIONS = np.array([
     [-0.7263, 0.0009],
     [-0.5925, 0.0034],
     [-0.4762, 0.0076],
@@ -41,21 +39,18 @@ _INTERIOR_XY = np.array([
     [-0.2114, 0.0302],
     [-0.1459, 0.0429],
 ], dtype=float)
-N_INTERIOR = len(_INTERIOR_XY)
+N_INTERIOR = len(_DEVELOPED_STATIONS)
 _Z_SPAN = HEIGHT_CAP_M / L_SCALE
-_R_SPAN = RADIUS_CAP_M / L_SCALE
 _Z_LO = ION_HEIGHT - _Z_SPAN
 _Z_HI = ION_HEIGHT + _Z_SPAN
 _CROSS_S = 0.1
+_CROSS_HI = CROSS_CAP_M / L_SCALE
 _MIRROR_ANGLE = 2.0 * np.pi / 3.0
 _MIRROR_HAT = np.array([np.cos(_MIRROR_ANGLE), np.sin(_MIRROR_ANGLE)])
-_CHORD_START = np.array([-1.0, 0.0])
-_CHORD_END = _CROSS_S * _MIRROR_HAT
-_CHORD_HAT = (_CHORD_END - _CHORD_START) / np.linalg.norm(_CHORD_END - _CHORD_START)
-_CHORD_ALONG = (_INTERIOR_XY - _CHORD_START) @ _CHORD_HAT
-_CHORD_SPINE = _CHORD_START + _CHORD_ALONG.reshape(-1, 1) * _CHORD_HAT
-_CHORD_OFFSET = _INTERIOR_XY - _CHORD_SPINE
-NOMINAL_BEND_R = float(np.max(np.linalg.norm(_CHORD_OFFSET, axis=1)))
+_NORMAL_HAT = np.array([
+    np.cos(_MIRROR_ANGLE - 0.5 * np.pi),
+    np.sin(_MIRROR_ANGLE - 0.5 * np.pi),
+])
 
 # ai, da, bi_x, bi_y, bo_x, bo_y, ci_l, co_l. Matches the developed junction.
 DEFAULT_JUNCTION = np.array([
@@ -83,25 +78,80 @@ def symmetric_gate_offsets(offsets):
     return values
 
 
-def interior_xy_from_radius(radius):
-    """Developed bend ``(x, y)``, scaled so the bow equals ``radius``.
+def bend_centerline(bend_x, handle, end_handle, cross_s, n=4000):
+    """Quadratic from the arm tangent to the mirror tangent, and its normal.
 
-    The stations stay on the chord from the bend entrance to the crossing.
-    The developed perpendicular offset is scaled by ``radius / nominal``.
-    The nominal radius returns the developed control points.
+    The control of the quadratic is the intersection of those two tangents, so
+    the curve leaves the arm along +x and arrives along the +120 degree
+    normal. ``cross_s`` is the only radius in this curve.
     """
-    if NOMINAL_BEND_R <= 0.0:
-        raise ValueError("developed bend has no radius")
-    scale = float(radius) / NOMINAL_BEND_R
-    return _CHORD_SPINE + scale * _CHORD_OFFSET
+    start = np.array([float(bend_x) + float(handle), 0.0])
+    mirror_end = float(cross_s) * _MIRROR_HAT
+    arrive = mirror_end - float(end_handle) * _NORMAL_HAT
+    if abs(_NORMAL_HAT[1]) <= 1e-12:
+        raise ValueError("mirror normal has no vertical component")
+    length = arrive[1] / _NORMAL_HAT[1]
+    control = arrive - length * _NORMAL_HAT
+    t = np.linspace(0.0, 1.0, int(n))
+    one_minus = 1.0 - t
+    points = (
+        (one_minus ** 2)[:, None] * start
+        + (2.0 * one_minus * t)[:, None] * control
+        + (t ** 2)[:, None] * arrive
+    )
+    derivative = (
+        (2.0 * one_minus)[:, None] * (control - start)
+        + (2.0 * t)[:, None] * (arrive - control)
+    )
+    tangent = derivative / np.maximum(np.linalg.norm(derivative, axis=1, keepdims=True), 1e-12)
+    normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
+    if float(np.dot(normal[len(normal) // 2], _NORMAL_HAT)) < 0.0:
+        normal = -normal
+    step = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    arc = np.concatenate([[0.0], np.cumsum(step)])
+    return points, normal, arc
 
 
-def interior_xyz_from_rz(radius, height):
-    """Bend control ``(x, y, z)`` from one radius and the control heights."""
+def _station_arc():
+    """Arc-length fractions of the seven developed bend controls."""
+    points, _normal, arc = bend_centerline(-1.0, 0.12, 0.048, _CROSS_S)
+    total = float(arc[-1])
+    fractions = []
+    for station in _DEVELOPED_STATIONS:
+        index = int(np.argmin(np.linalg.norm(points - station, axis=1)))
+        fractions.append(float(arc[index]) / total)
+    return np.asarray(fractions, dtype=float)
+
+
+_STATION_ARC = _station_arc()
+
+
+def interior_xy_from_s(cross_s, bend_x=-1.0, handle=0.12, end_handle=0.048):
+    """Bend ``(x, y)`` fixed by the radius ``cross_s``.
+
+    ``cross_s`` is the distance from the origin along the +120 degree line.
+    It sets the tangent-matched curve, and the seven controls are the same
+    arc stations used for the developed bend. Those coordinates are not free.
+    ``cross_s = 0.1`` returns the developed controls.
+    """
+    points, _normal, arc = bend_centerline(bend_x, handle, end_handle, cross_s)
+    distance = _STATION_ARC * float(arc[-1])
+    return np.column_stack([
+        np.interp(distance, arc, points[:, axis]) for axis in range(2)
+    ])
+
+
+def interior_xyz_from_sz(
+    cross_s, height, bend_x=-1.0, handle=0.12, end_handle=0.048,
+):
+    """Bend control ``(x, y, z)``. ``(x, y)`` comes only from ``cross_s``."""
     height = np.asarray(height, dtype=float).reshape(-1)
     if height.size != N_INTERIOR:
         raise ValueError("bend heights must have length {}".format(N_INTERIOR))
-    return np.column_stack([interior_xy_from_radius(radius), height])
+    return np.column_stack([
+        interior_xy_from_s(cross_s, bend_x, handle, end_handle),
+        height,
+    ])
 
 
 def _feature_table():
@@ -114,7 +164,7 @@ def _feature_table():
         ("bo_y", 0.00, 0.35),
         ("ci_l", 0.60, 1.80),
         ("co_l", 3.50, 6.50),
-        ("bend_r", -_R_SPAN, _R_SPAN),
+        ("cross_s", 0.0, _CROSS_HI),
     ]
     for index in range(N_INTERIOR):
         rows.append(("c{}_z".format(index), _Z_LO, _Z_HI))
@@ -133,14 +183,13 @@ _BOUNDS = _feature_table()
 class TransportDesign:
     """One Y junction and one round-trip trajectory through it.
 
-    ``bend_r`` is the shared radius of the bend controls from the RF null.
-    ``interior_z`` is the height of each developed bend control. ``(x, y)``
-    of those controls stays at the developed polygon. ``arm_xyz`` is fixed.
+    ``cross_s`` is the bend radius. It fixes the control ``(x, y)``. Those
+    coordinates are not separate search parameters. ``interior_z`` is the
+    height of each control. ``arm_xyz`` is fixed.
     The start and end stay at 50 um.
     """
 
     junction: np.ndarray
-    bend_r: float
     interior_z: np.ndarray
     curves: tuple
     arm_xyz: np.ndarray = field(default_factory=lambda: np.array(_ARM, dtype=float))
@@ -150,7 +199,7 @@ class TransportDesign:
     handle: float = 0.12
     end_handle: float = 0.048
     arm_handle: float = 0.12
-    n_time_gates: int = 9
+    n_time_gates: int = 8
     gate_offsets: np.ndarray = field(default_factory=lambda: np.zeros(0))
     z_bend: float = ION_HEIGHT
     z_cross: float = ION_HEIGHT
@@ -161,13 +210,15 @@ class TransportDesign:
         self.junction = np.asarray(self.junction, dtype=float).reshape(-1).copy()
         if self.junction.size != 8:
             raise ValueError("junction controls must be 8 values")
-        self.bend_r = float(self.bend_r)
         self.interior_z = np.asarray(self.interior_z, dtype=float).reshape(-1).copy()
         if self.interior_z.size != N_INTERIOR:
             raise ValueError(
                 "interior_z must have length {}".format(N_INTERIOR)
             )
-        self.interior_xyz = interior_xyz_from_rz(self.bend_r, self.interior_z)
+        self.interior_xyz = interior_xyz_from_sz(
+            self.cross_s, self.interior_z,
+            self.bend_x, self.handle, self.end_handle,
+        )
         self.arm_xyz = np.asarray(self.arm_xyz, dtype=float)
         if self.arm_xyz.shape != (N_ARM, 3):
             raise ValueError(
@@ -217,27 +268,31 @@ class TransportDesign:
             value = np.asarray(value, dtype=float).reshape(-1)
             if value.size:
                 value = symmetric_gate_offsets(value)
-        if name == "bend_r" and not isinstance(value, property):
+        if name == "cross_s" and not isinstance(value, property):
             value = float(np.asarray(value, dtype=float).reshape(-1)[0])
         if name == "interior_z":
             value = np.asarray(value, dtype=float).reshape(-1).copy()
         object.__setattr__(self, name, value)
-        if name in ("bend_r", "interior_z") and hasattr(self, "bend_r") and hasattr(self, "interior_z"):
-            try:
-                object.__setattr__(
-                    self,
-                    "interior_xyz",
-                    interior_xyz_from_rz(self.bend_r, self.interior_z),
-                )
-            except Exception:
-                pass
+        if name in ("cross_s", "interior_z", "bend_x", "handle", "end_handle"):
+            if hasattr(self, "cross_s") and hasattr(self, "interior_z"):
+                try:
+                    object.__setattr__(
+                        self,
+                        "interior_xyz",
+                        interior_xyz_from_sz(
+                            self.cross_s, self.interior_z,
+                            getattr(self, "bend_x", -1.0),
+                            getattr(self, "handle", 0.12),
+                            getattr(self, "end_handle", 0.048),
+                        ),
+                    )
+                except Exception:
+                    pass
 
 
 def within_transport_caps(design):
-    """Crossing, bend radius, and control heights stay within 15 um of the RF center."""
+    """Bend radius ``cross_s`` and control heights stay within 15 um of the RF center."""
     if design.cross_s * L_SCALE > CROSS_CAP_M + 1e-12:
-        return False
-    if abs(float(design.bend_r)) * L_SCALE > RADIUS_CAP_M + 1e-12:
         return False
     heights = np.concatenate([
         design.arm_xyz[:, 2],
@@ -266,10 +321,9 @@ class DesignSpace:
         return len(self.names)
 
     def nominal_design(self):
-        """Developed junction. Bend radius is zero; height stays at 50 um."""
+        """Developed junction. Radius ``cross_s`` is 0.1; height stays at 50 um."""
         return TransportDesign(
             junction=DEFAULT_JUNCTION.copy(),
-            bend_r=NOMINAL_BEND_R,
             interior_z=np.full(N_INTERIOR, ION_HEIGHT),
             curves=(3.0, 1.5),
             arm_xyz=np.array(_ARM, dtype=float),
@@ -289,7 +343,7 @@ class DesignSpace:
     def pack(self, design):
         values = np.concatenate([
             np.asarray(design.junction, dtype=float).reshape(8),
-            [float(design.bend_r)],
+            [float(design.cross_s)],
             np.asarray(design.interior_z, dtype=float).reshape(N_INTERIOR),
             [design.curves[0], design.curves[1]],
         ])
@@ -306,11 +360,10 @@ class DesignSpace:
         z0 = 9
         return TransportDesign(
             junction=x[:8],
-            bend_r=x[8],
             interior_z=x[z0:z0 + N_INTERIOR],
             curves=(x[-2], x[-1]),
             arm_xyz=np.array(_ARM, dtype=float),
-            cross_s=_CROSS_S,
+            cross_s=x[8],
             x_start=self.x_start,
             bend_x=self.bend_x,
             handle=self.handle,
@@ -367,7 +420,7 @@ class DesignSpace:
         lo = center + fraction * (self.lower - center)
         hi = center + fraction * (self.upper - center)
         for index, name in enumerate(self.names):
-            if name == "bend_r" or name.endswith("_z"):
+            if name == "cross_s" or name.endswith("_z"):
                 lo[index] = center[index] + cap_fraction * (self.lower[index] - center[index])
                 hi[index] = center[index] + cap_fraction * (self.upper[index] - center[index])
         return lo, hi

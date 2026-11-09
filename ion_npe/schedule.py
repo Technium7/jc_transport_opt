@@ -4,7 +4,9 @@ That search cut the phonon number by about 10x by moving the intermediate
 gates of an otherwise fixed transport and keeping the cross-entropy cloud on
 the designs that had just been simulated. The junction and the spatial bend
 stay at the nominal design. Only the interior samples of the time law move.
-With a symmetric waveform there are four free paired gates.
+With a symmetric waveform, four gates lie on the first half and the last of
+them is at mid-path. The center gate stays fixed, and the return gates mirror
+the first three.
 """
 
 from pathlib import Path
@@ -14,7 +16,7 @@ import numpy as np
 from .design import DesignSpace, symmetric_gate_offsets
 from .simulate import force_line, simulate_design, simulation_settings, stray_field_line, total_heating
 from .train import train_predictor
-from .trajectory import s_of_tau, time_gate_samples
+from .trajectory import one_sided_time_gates, s_of_tau, time_gate_samples
 
 
 def schedule_is_admissible(offsets, curves, n_gates, limit=0.10, gap=0.015):
@@ -107,13 +109,13 @@ def _plot_time_law(curves, n_gates, best_offsets, out):
     tau = np.linspace(0.0, 1.0, 400)
     nominal = s_of_tau(tau, curves, n_gates)
     best = s_of_tau(tau, curves, n_gates, best_offsets)
-    knots, nominal_gates = time_gate_samples(curves, n_gates)
-    _knots, best_gates = time_gate_samples(curves, n_gates, best_offsets)
+    nominal_tau, nominal_gates = one_sided_time_gates(curves, n_gates)
+    best_tau, best_gates = one_sided_time_gates(curves, n_gates, best_offsets)
     fig, ax = plt.subplots(figsize=(6.2, 4.0))
     ax.plot(tau, nominal, color="#4C78A8", label="nominal waveform")
     ax.plot(tau, best, color="#E45756", label="optimized gates")
-    ax.scatter(knots, nominal_gates, s=28, color="#4C78A8", zorder=3)
-    ax.scatter(knots[1:-1], best_gates[1:-1], s=36, facecolors="none", edgecolors="#E45756", zorder=4)
+    ax.scatter(nominal_tau, nominal_gates, s=28, color="#4C78A8", zorder=3)
+    ax.scatter(best_tau, best_gates, s=36, facecolors="none", edgecolors="#E45756", zorder=4)
     ax.set_xlabel("normalized time")
     ax.set_ylabel("arc-length fraction")
     ax.set_xlim(0.0, 1.0)
@@ -139,9 +141,9 @@ def optimize_schedule(
 ):
     """Train on waveforms near the nominal path, then cross-entropy on the gates.
 
-    The junction, the bend, and ``(a, b)`` stay at the developed design. The
-    eight interior time gates move, with four free after mid-path symmetry,
-    the same role as the intermediate position gates in the straight-line search.
+    The junction, the bend, and ``(a, b)`` stay at the developed design. Four
+    waveform gates lie on the first half, the last at mid-path. The center
+    gate stays fixed and the return gates mirror the first three.
     """
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)

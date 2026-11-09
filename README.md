@@ -1,6 +1,6 @@
 # Ion trap junction design with a stochastic network
 
-This project simulates Y-junction ion transport and co-optimizes the junction geometry together with a three-dimensional trajectory. The ion starts and ends at 50 μm. The bend keeps the developed control-point shape. `bend_r` scales that bow, and the nominal radius is the developed bow. Training also varies the height of each control. Radius and height each stay within 15 μm of the RF center, and the ion's height along the simulated path stays in that same band. The transport waveform is symmetric about mid-path, so eight interior gates give four free paired controls.
+This project simulates Y-junction ion transport and co-optimizes the junction geometry together with a three-dimensional trajectory. The ion starts and ends at 50 μm. The bend radius `s` (`cross_s`) builds the tangent-matched curve, and the seven bend controls are samples of that curve. Their `(x, y)` stays on the curve. Training varies `s` and the height of each control. `s` stays within 15 μm of the RF center, and each height stays within 15 μm of 50 μm. The ion's height along the simulated path stays in that same band. The transport waveform is symmetric about mid-path. Four gates lie on the first half, and the last of them is at the center. The return-half gates mirror the first three.
 
 The dynamics are the developed symplectic integrator. The RF pseudopotential comes from the junction electrodes. The default DC force is the electrode field of the least-squares voltage solution on the segmented DC electrodes: each 100 ns update is solved for the target well, then the ion is integrated in that held field. The ideal harmonic well is only an optional comparison. The stray field is off unless `--noise` is set. A network predicts the final motional quanta. A stochastic network injects input-dependent noise into its first hidden layer and is trained so that noise reproduces the spread of the simulated heating. Training is Adam followed by full-batch L-BFGS. A cross-entropy loop uses that prediction to choose which designs to simulate, fine-tunes the network the same way, and refits the sampling distribution to the best simulated designs.
 
@@ -10,7 +10,7 @@ The dynamics are the developed symplectic integrator. The RF pseudopotential com
 | --- | --- |
 | `ion_npe/design.py` | Junction controls, one bend radius, and the bend-control heights |
 | `ion_npe/junction.py` | Symmetric Y-junction and the RF Laplacian |
-| `ion_npe/trajectory.py` | Round-trip path. Bend controls are RF-null radius and height |
+| `ion_npe/trajectory.py` | Round-trip path. Bend `(x, y)` comes from radius `s`; height is free |
 | `ion_npe/dynamics.py` | Path frame, stray field, velocity Verlet |
 | `ion_npe/simulate.py` | One design in, final quanta out |
 | `ion_npe/parallel.py` | Split a simulation batch across SLURM tasks |
@@ -22,7 +22,7 @@ The dynamics are the developed symplectic integrator. The RF pseudopotential com
 | `ion_npe/study.py` | Nominal-centered data, Adam+L-BFGS, and repeated active rounds |
 | `ion_npe/plotting.py` | Path, loss, and search figures |
 
-The design vector is the eight junction controls `ai, da, bi_x, bi_y, bo_x, bo_y, ci_l, co_l`, one bend radius `bend_r`, the seven bend-control heights `c0_z` … `c6_z`, and the time-profile pair `(a, b)`. Joint and nearby searches also append the eight symmetric waveform gates. At the nominal radius the bend `(x, y)` is the developed polygon. The arm path, the bend entrance, the crossing height, and the crossing distance stay at the developed design. The start and the end stay at 50 μm. Also fixed are the ion mass, RF gap and width, RF voltage and frequency, transport speed, and the target axial and radial frequencies.
+The design vector is the eight junction controls `ai, da, bi_x, bi_y, bo_x, bo_y, ci_l, co_l`, the bend radius `cross_s`, the seven bend-control heights `c0_z` … `c6_z`, and the time-profile pair `(a, b)`. Joint and nearby searches also append the waveform gates: four on the first half, the last at mid-path, with the return half mirrored. `cross_s` fixes the bend `(x, y)`. At `cross_s = 0.1` that `(x, y)` is the developed bend. The arm path and the crossing height stay at the developed design. The start and the end stay at 50 μm. Also fixed are the ion mass, RF gap and width, RF voltage and frequency, transport speed, and the target axial and radial frequencies.
 
 ## Run
 

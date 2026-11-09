@@ -17,8 +17,9 @@ from .simulate import force_line, simulate_design, simulation_settings, stray_fi
 from .active import active_ranking
 from .train import finetune, train_predictor
 
-# Eight interior gates. Symmetry leaves four free paired controls.
-N_GATES = 8
+# Seven interior gates. Four lie on the first half, the last of them at
+# mid-path. Symmetry fixes that center gate and mirrors the other three.
+N_GATES = 7
 GATE_LIMIT = 0.10
 
 
@@ -35,7 +36,7 @@ def _std(space, lower, upper, gate_std):
     for index, name in enumerate(names):
         if name.startswith("g"):
             std[index] = gate_std
-        elif name == "bend_r" or name.endswith("_z"):
+        elif name == "cross_s" or name.endswith("_z"):
             std[index] = 0.22 * span[index]
         elif name in ("curve_a", "curve_b"):
             std[index] = 0.12 * span[index]
@@ -551,12 +552,11 @@ def optimize_joint(
         "junction shift from nominal, unit norm: {:.4g}".format(junction_shift),
         "trajectory shift from nominal, unit norm: {:.4g}".format(path_shift),
         "waveform shift from nominal, gate norm: {:.4g}".format(gate_shift),
-        "plotted bend radius: {:.2f} um".format(design.bend_r * L_SCALE * 1e6),
+        "plotted bend radius s: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
         "plotted bend height: {:.2f} to {:.2f} um".format(
             design.interior_z.min() * L_SCALE * 1e6,
             design.interior_z.max() * L_SCALE * 1e6,
         ),
-        "plotted crossing distance: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
     ]
     text = "\n".join(lines) + "\n"
     (out / "summary.txt").write_text(text)

@@ -10,6 +10,7 @@ from ion_npe.trajectory import (
     control_polygon,
     end_point,
     height_within_cap,
+    one_sided_time_gates,
     path_geometry,
     s_of_tau,
     time_gate_samples,
@@ -19,32 +20,35 @@ from ion_npe.trajectory import (
 class TrajectoryTests(unittest.TestCase):
     def test_time_law_starts_and_ends_at_rest(self):
         tau = np.linspace(0.0, 1.0, 40)
-        distance = s_of_tau(tau, (3.0, 1.5), n_gates=9)
+        distance = s_of_tau(tau, (3.0, 1.5), n_gates=8)
         self.assertAlmostEqual(distance[0], 0.0, places=8)
         self.assertAlmostEqual(distance[-1], 1.0, places=8)
         self.assertTrue(np.all(np.diff(distance) >= -1e-8))
-        zeros = np.zeros(8)
+        zeros = np.zeros(7)
         np.testing.assert_allclose(
-            s_of_tau(tau, (3.0, 1.5), n_gates=9, gate_offsets=zeros),
+            s_of_tau(tau, (3.0, 1.5), n_gates=8, gate_offsets=zeros),
             distance,
         )
         shifted = zeros.copy()
         shifted[0] = 0.04
-        _knots, samples = time_gate_samples((3.0, 1.5), 9, shifted)
-        _knots, nominal_samples = time_gate_samples((3.0, 1.5), 9)
+        _knots, samples = time_gate_samples((3.0, 1.5), 8, shifted)
+        _knots, nominal_samples = time_gate_samples((3.0, 1.5), 8)
         self.assertGreater(samples[1], nominal_samples[1])
         self.assertAlmostEqual(samples[0], 0.0, places=8)
         self.assertAlmostEqual(samples[-1], 1.0, places=8)
 
     def test_a_design_waveform_is_symmetric_about_mid_path(self):
         design = DesignSpace().nominal_design()
-        design.gate_offsets = np.array([0.04, -0.02, 0.03, 0.01, 0.08, -0.05, 0.02, -0.01])
+        design.gate_offsets = np.array([0.04, -0.02, 0.03, 0.01, -0.03, 0.02, -0.04])
         gates = design.gate_offsets
-        self.assertEqual(len(gates), 8)
-        self.assertAlmostEqual(float(gates[0]), -float(gates[7]))
-        self.assertAlmostEqual(float(gates[1]), -float(gates[6]))
-        self.assertAlmostEqual(float(gates[2]), -float(gates[5]))
-        self.assertAlmostEqual(float(gates[3]), -float(gates[4]))
+        self.assertEqual(len(gates), 7)
+        self.assertAlmostEqual(float(gates[0]), -float(gates[6]))
+        self.assertAlmostEqual(float(gates[1]), -float(gates[5]))
+        self.assertAlmostEqual(float(gates[2]), -float(gates[4]))
+        self.assertEqual(float(gates[3]), 0.0)
+        tau_gates, shown = one_sided_time_gates(design.curves, design.n_time_gates, gates)
+        self.assertEqual(len(shown), 4)
+        self.assertAlmostEqual(float(tau_gates[-1]), 0.5)
         np.testing.assert_allclose(symmetric_gate_offsets(gates), gates)
         tau = np.linspace(0.0, 1.0, 241)
         distance = s_of_tau(tau, design.curves, design.n_time_gates, gates)
@@ -53,11 +57,11 @@ class TrajectoryTests(unittest.TestCase):
     def test_a_large_gate_shift_is_rejected(self):
         from ion_npe.schedule import schedule_is_admissible
 
-        self.assertTrue(schedule_is_admissible(np.zeros(8), (3.0, 1.5), 9))
-        too_far = np.zeros(8)
+        self.assertTrue(schedule_is_admissible(np.zeros(7), (3.0, 1.5), 8))
+        too_far = np.zeros(7)
         too_far[0] = 0.2
         too_far[-1] = -0.2
-        self.assertFalse(schedule_is_admissible(too_far, (3.0, 1.5), 9))
+        self.assertFalse(schedule_is_admissible(too_far, (3.0, 1.5), 8))
 
     def test_constant_height_path(self):
         design = DesignSpace().nominal_design()
@@ -82,14 +86,16 @@ class TrajectoryTests(unittest.TestCase):
         self.assertLess(path[:, 2].min(), 0.95)
         self.assertAlmostEqual(path[len(path) // 2, 2], 1.0, places=2)
 
-    def test_bend_radius_scales_the_developed_bow(self):
+    def test_radius_fixes_bend_xy(self):
         design = DesignSpace().nominal_design()
         nominal_xy = design.interior_xyz[:, :2].copy()
-        design.bend_r *= 2.0
-        doubled = design.interior_xyz[:, :2].copy()
-        design.bend_r = 0.0
-        spine = design.interior_xyz[:, :2]
-        np.testing.assert_allclose(spine + 2.0 * (nominal_xy - spine), doubled)
+        design.cross_s = 0.2
+        moved = design.interior_xyz[:, :2].copy()
+        self.assertGreater(np.linalg.norm(moved - nominal_xy), 1e-3)
+        design.interior_z = np.full(N_INTERIOR, 0.9)
+        np.testing.assert_allclose(design.interior_xyz[:, :2], moved)
+        polygon = control_polygon(design)
+        np.testing.assert_allclose(polygon[-1, :2], design.cross_s * MIRROR_HAT)
         path = path_geometry(design, n=601)
         self.assertAlmostEqual(path[0, 2], 1.0, places=6)
         self.assertAlmostEqual(path[-1, 2], 1.0, places=6)

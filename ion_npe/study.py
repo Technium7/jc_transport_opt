@@ -298,8 +298,7 @@ def run_study(
     lines.append("lowest five designs, heating and unit distance from nominal:")
     for item in gap["closest_low"]:
         lines.append("  heating {:.6g}  unit distance {:.3f}".format(item[0], item[1]))
-    lines.append("best bend radius: {:.2f} um".format(best_design.bend_r * L_SCALE * 1e6))
-    lines.append("best crossing distance: {:.2f} um".format(best_design.cross_s * L_SCALE * 1e6))
+    lines.append("best bend radius s: {:.2f} um".format(best_design.cross_s * L_SCALE * 1e6))
     lines.append("best crossing height: {:.2f} um".format(best_design.z_cross * L_SCALE * 1e6))
     lines.append("best arm height: {:.2f} to {:.2f} um".format(
         float(best_design.arm_xyz[:, 2].min()) * L_SCALE * 1e6,

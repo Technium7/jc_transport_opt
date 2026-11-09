@@ -21,7 +21,7 @@ def _parts(space):
     names = space.names[8:]
     z_columns = np.array([name.endswith("_z") for name in names])
     free_columns = np.array([
-        name == "bend_r" or name.endswith("_z") for name in names
+        name == "cross_s" or name.endswith("_z") for name in names
     ])
     return names, z_columns, free_columns
 
@@ -234,7 +234,7 @@ def optimize_trajectory(
         ),
         "best bend entrance: {:.2f} um".format(design.z_bend * 50.0),
         "best crossing height: {:.2f} um".format(design.z_cross * 50.0),
-        "best bend radius: {:.2f} um".format(design.bend_r * 50.0),
+        "best bend radius s: {:.2f} um".format(design.cross_s * 50.0),
         "best bend control height: {:.2f} to {:.2f} um".format(
             design.interior_z.min() * 50.0, design.interior_z.max() * 50.0
         ),

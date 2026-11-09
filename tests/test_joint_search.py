@@ -15,16 +15,16 @@ class JointSearchTests(unittest.TestCase):
 
     def test_a_joint_design_stores_a_symmetric_waveform(self):
         space = DesignSpace()
-        self.assertEqual(N_GATES, 8)
-        gates = np.array([0.04, -0.01, 0.02, 0.03, 0.05, -0.02, 0.01, -0.04])
+        self.assertEqual(N_GATES, 7)
+        gates = np.array([0.04, -0.01, 0.02, 0.03, -0.02, 0.01, -0.04])
         row = np.concatenate([space.nominal(), gates])
         design = _unpack(space, row)
         out = design.gate_offsets
-        self.assertEqual(len(out), 8)
-        self.assertAlmostEqual(float(out[0]), -float(out[7]))
-        self.assertAlmostEqual(float(out[1]), -float(out[6]))
-        self.assertAlmostEqual(float(out[2]), -float(out[5]))
-        self.assertAlmostEqual(float(out[3]), -float(out[4]))
+        self.assertEqual(len(out), 7)
+        self.assertAlmostEqual(float(out[0]), -float(out[6]))
+        self.assertAlmostEqual(float(out[1]), -float(out[5]))
+        self.assertAlmostEqual(float(out[2]), -float(out[4]))
+        self.assertEqual(float(out[3]), 0.0)
 
 
 if __name__ == "__main__":

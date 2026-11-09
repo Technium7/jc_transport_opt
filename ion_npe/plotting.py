@@ -12,7 +12,13 @@ from matplotlib.patches import Patch
 
 from .constants import ION_HEIGHT_M, L_SCALE, TRANSPORT_SPEED_M_S
 from .simulate import total_heating
-from .trajectory import arm_polygon, control_polygon, dynamics_grid, path_geometry, time_gate_samples
+from .trajectory import (
+    arm_polygon,
+    control_polygon,
+    dynamics_grid,
+    one_sided_time_gates,
+    path_geometry,
+)
 
 # Same electrode system as ``control._responses`` / ``build_junction``.
 _RF_FACE = "#4C78A8"
@@ -209,13 +215,14 @@ def _height_profile(design):
     return distance_um, path[:, 2] * L_SCALE * 1e6
 
 
-def plot_best_design(design, out, reference=None, total_quanta=None):
+def plot_best_design(design, out, reference=None, total_quanta=None, title=None):
     """Junction, bend controls, transport waveform, and height along the path.
 
     The path is colored by the ion's speed. The filled electrodes are the RF
     rails and segmented DC electrodes from ``build_junction``, the same set
     used to compute the unit-volt response function. ``reference`` is the
-    nominal design, drawn dashed on the speed and height panels.
+    nominal design, drawn dashed on the junction, the bend, the speed, and
+    the height.
     """
     from .junction import build_junction
 
@@ -225,10 +232,10 @@ def plot_best_design(design, out, reference=None, total_quanta=None):
     fixed = np.vstack([controls[:2], controls[-2:]])
     vmax = float(np.max(speed))
     if reference is not None:
-        _ref_xyz, ref_distance, ref_speed = _motion(reference)
+        ref_xyz, ref_distance, ref_speed = _motion(reference)
         vmax = max(vmax, float(np.max(ref_speed)))
     else:
-        ref_distance = ref_speed = None
+        ref_xyz = ref_distance = ref_speed = None
     vmax = max(vmax * 1.05, 1.0)
 
     fig = plt.figure(figsize=(10.4, 9.6), constrained_layout=True)
@@ -240,10 +247,14 @@ def plot_best_design(design, out, reference=None, total_quanta=None):
     junction = build_junction(design.junction)
 
     _draw_junction_electrodes(ax, junction)
+    if ref_xyz is not None:
+        ax.plot(ref_xyz[:, 0], ref_xyz[:, 1], color="#9a9a9a", ls="--", lw=1.2, zorder=2)
     drawn = _colored_path(ax, xyz[:, :2], speed, 0.0, vmax, lw=2.4)
     fig.colorbar(drawn, ax=ax, fraction=0.025, pad=0.01, label="speed (m/s)")
-    _knots, samples = time_gate_samples(design.curves, design.n_time_gates, design.gate_offsets)
-    gate_distance = samples[1:-1] * distance[-1]
+    _gate_tau, gate_fraction = one_sided_time_gates(
+        design.curves, design.n_time_gates, design.gate_offsets,
+    )
+    gate_distance = gate_fraction * distance[-1]
     gate_index = [int(np.argmin(np.abs(distance - item))) for item in gate_distance]
     ax.scatter(
         xyz[gate_index, 0], xyz[gate_index, 1], s=34, marker="D",
@@ -256,16 +267,20 @@ def plot_best_design(design, out, reference=None, total_quanta=None):
     ax.set_aspect("equal")
     ax.set_xlabel("x (trap heights)")
     ax.set_ylabel("y (trap heights)")
-    title = "best junction and trajectory"
-    if total_quanta is not None:
-        title = "best design, {:.3g} quanta".format(float(total_quanta))
+    if title is None:
+        title = "best junction and trajectory"
+        if total_quanta is not None:
+            title = "best design, {:.3g} quanta".format(float(total_quanta))
     ax.set_title(title)
 
     ax.legend(
         handles=[
             Patch(facecolor=_RF_FACE, edgecolor=_RF_EDGE, alpha=0.5, label="RF"),
             Patch(facecolor=_DC_FACE, edgecolor=_DC_EDGE, alpha=0.5, label="DC"),
-            Line2D([0], [0], color="#9a9a9a", ls="--", lw=1.2, label="nominal waveform"),
+            Line2D(
+                [0], [0], color="#9a9a9a", ls="--", lw=1.2,
+                label="nominal path" if ref_xyz is not None else "nominal waveform",
+            ),
             Line2D([0], [0], color="#4C78A8", lw=1.6, label="optimized waveform"),
             Line2D(
                 [0], [0], marker="D", color="#333333", ls="none",
@@ -276,6 +291,11 @@ def plot_best_design(design, out, reference=None, total_quanta=None):
     )
 
     _draw_junction_electrodes(bend, junction, rf_alpha=0.45, dc_alpha=0.32)
+    if ref_xyz is not None:
+        bend.plot(
+            ref_xyz[:, 0], ref_xyz[:, 1], color="#9a9a9a", ls="--", lw=1.2,
+            zorder=3, label="nominal path",
+        )
     _colored_path(bend, xyz[:, :2], speed, 0.0, vmax, lw=2.0)
     bend.plot(controls[:, 0], controls[:, 1], color="#E45756", lw=0.8, ls="--", zorder=4)
     bend.scatter(fixed[:, 0], fixed[:, 1], s=26, marker="s", color="#333333", zorder=5, label="bend ends")
@@ -294,7 +314,10 @@ def plot_best_design(design, out, reference=None, total_quanta=None):
             color="#E45756",
         )
     bend.set_xlim(controls[:, 0].min() - 0.15, controls[:, 0].max() + 0.22)
-    bend.set_ylim(-0.03, 0.16)
+    bend.set_ylim(
+        min(-0.03, float(controls[:, 1].min()) - 0.02),
+        max(0.16, float(controls[:, 1].max()) + 0.04),
+    )
     bend.set_aspect("equal", adjustable="box")
     bend.set_xlabel("x (trap heights)")
     bend.set_ylabel("y (trap heights)")

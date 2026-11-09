@@ -2,9 +2,9 @@
 
 The ion starts at ``(x_start, 0, z_arm)`` and ends at the reflection of that
 point, at the same height. Both endpoints are 50 um. The arm stays on the
-developed path. Through the bend, the free controls are radius from the RF
-null and height. ``z`` is taken from the design. It is not solved from a
-height model.
+developed path. The bend radius ``cross_s`` fixes the bend ``(x, y)``. Height
+is the free bend control. ``z`` is taken from the design. It is not solved
+from a height model.
 """
 
 import numpy as np
@@ -139,13 +139,15 @@ def _eval_spline_1d(coeffs, times, dt):
     return values
 
 
-def time_gate_samples(curves, n_gates=9, gate_offsets=None):
+def time_gate_samples(curves, n_gates=8, gate_offsets=None):
     """Arc-fraction samples of the transport waveform, including the fixed ends.
 
     ``gate_offsets`` moves the interior samples, the same freedom as the
     intermediate gates in the straight-line transport search. The ends stay
-    at 0 and 1, and the spline still leaves and arrives at rest. With a
-    symmetric waveform there are four free paired gates.
+    at 0 and 1, and the spline still leaves and arrives at rest. The interior
+    gates are equally spaced and one sits at mid-path. A symmetric waveform
+    uses the four gates from the start through that center. The center offset
+    stays at zero, and the gates after it mirror the first three.
     """
     a, b = curves
     knots = np.linspace(0.0, 1.0, int(n_gates) + 1)
@@ -162,7 +164,18 @@ def time_gate_samples(curves, n_gates=9, gate_offsets=None):
     return knots, samples
 
 
-def s_of_tau(tau, curves, n_gates=9, gate_offsets=None):
+def one_sided_time_gates(curves, n_gates=8, gate_offsets=None):
+    """Interior gates on the first half, including the center gate.
+
+    Returns ``(tau, arc fraction)``. The last gate is at mid-path. Gates on
+    the return half are the mirrors of the first three and are not included.
+    """
+    knots, samples = time_gate_samples(curves, n_gates, gate_offsets)
+    center = 1 + (samples.size - 2) // 2
+    return knots[1:center + 1], samples[1:center + 1]
+
+
+def s_of_tau(tau, curves, n_gates=8, gate_offsets=None):
     """Arc-length fraction versus tau. Velocity is zero at tau = 0 and tau = 1."""
     knots, samples = time_gate_samples(curves, n_gates, gate_offsets)
     dt = np.diff(knots)
@@ -196,8 +209,9 @@ def control_polygon(design):
     The curve leaves the arm at ``z_bend`` and arrives at ``z_cross``.
     ``handle`` sets the tangent on the arm. ``end_handle`` is shorter, so the
     two squares at the crossing continue the tightening of the free controls.
-    Interior ``(x, y)`` is the developed bow scaled by ``bend_r``. The
-    crossing stays on the +120 degree line so the return path is its reflection.
+    Interior ``(x, y)`` is the tangent-matched bend at radius ``cross_s``.
+    Those coordinates stay on that curve. The crossing stays on the +120
+    degree line so the return path is its reflection.
     """
     _require_design(design)
     p_cross_xy = design.cross_s * MIRROR_HAT

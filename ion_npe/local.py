@@ -51,7 +51,7 @@ def neighborhood_half(space, lower, upper):
     for index, name in enumerate(names):
         if name.startswith("g"):
             half[index] = 0.08
-        elif name == "bend_r" or name.endswith("_z"):
+        elif name == "cross_s" or name.endswith("_z"):
             half[index] = 0.40 * span[index]
         elif name in ("curve_a", "curve_b"):
             half[index] = 0.30 * span[index]
@@ -529,12 +529,11 @@ def optimize_local(
         "junction shift from nominal, unit norm: {:.4g}".format(junction_shift),
         "trajectory shift from nominal, unit norm: {:.4g}".format(path_shift),
         "waveform shift from nominal, gate norm: {:.4g}".format(gate_shift),
-        "best bend radius: {:.2f} um".format(design.bend_r * L_SCALE * 1e6),
+        "best bend radius s: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
         "best bend height: {:.2f} to {:.2f} um".format(
             design.interior_z.min() * L_SCALE * 1e6,
             design.interior_z.max() * L_SCALE * 1e6,
         ),
-        "best crossing distance: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
     ]
     text = "\n".join(lines) + "\n"
     (out / "summary.txt").write_text(text)

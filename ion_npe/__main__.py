@@ -74,8 +74,8 @@ def _cmd_simulate(args):
                 )
             )
         design.interior_z = heights
-    if args.bend_r is not None:
-        design.bend_r = float(args.bend_r)
+    if args.cross_s is not None:
+        design.cross_s = float(args.cross_s)
     seeds = tuple(args.seeds)
     result = simulate_design(design, seeds=seeds, with_ideal=True, **_physics(args))
     if not result.ok:
@@ -92,8 +92,8 @@ def _cmd_simulate(args):
     print("path z {:.2f} to {:.2f} um".format(
         result.z_range[0] * L_SCALE * 1e6, result.z_range[1] * L_SCALE * 1e6
     ))
-    print("bend radius {:.2f} um".format(design.bend_r * L_SCALE * 1e6))
-    print("bend controls (xy fixed, z in um):")
+    print("bend radius s {:.2f} um".format(design.cross_s * L_SCALE * 1e6))
+    print("bend controls (xy fixed by s, z in um):")
     for index, (height, point) in enumerate(zip(design.interior_z, design.interior_xyz)):
         print("  c{}  z={:.2f}  xy=({:.3f}, {:.3f})".format(
             index, height * L_SCALE * 1e6, point[0], point[1],
@@ -281,8 +281,8 @@ def main(argv=None):
         help="height of each bend control, in trap heights; default is 50 um",
     )
     sim.add_argument(
-        "--bend-r", type=float, default=None,
-        help="shared bend radius from the RF null, in trap heights; default is 0",
+        "--cross-s", type=float, default=None,
+        help="bend radius s along the +120 degree line, in trap heights; default is 0.1",
     )
     sim.add_argument("--out", type=str, default="", help="optional path figure")
     sim.set_defaults(func=_cmd_simulate)
