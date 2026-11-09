@@ -1,53 +1,68 @@
 """Junction and trajectory design vector.
 
-The search coordinates are the eight symmetric Y-junction controls, the arm
-and bend controls ``(x, y, z)``, the height where the bend starts, the height
-at the crossing, the ``(a, b)`` time-profile parameters, and the crossing
-distance. The ion starts and ends at 50 um. Between those endpoints, including
-at the crossing, the path may leave 50 um. Controls are spaced more tightly
-near the junction.
+The search coordinates are the eight symmetric Y-junction controls, one bend
+radius, the heights of the developed bend control points, and the ``(a, b)``
+time profile. Those control points keep their developed ``(x, y)``. The arm,
+the bend entrance, the crossing height, and the crossing distance stay at the
+developed path. The shared radius and each height stay within 15 um of the
+RF center.
 """
 
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from .constants import CROSS_CAP_M, HEIGHT_CAP_M, ION_HEIGHT, L_SCALE
+from .constants import (
+    CROSS_CAP_M,
+    HEIGHT_CAP_M,
+    ION_HEIGHT,
+    L_SCALE,
+    RADIUS_CAP_M,
+)
 
-# (nominal x, x lower, x upper, nominal y, y lower, y upper).
-# Arm controls sit on the straight section, after the fixed 50 um start and
-# before the bend. Their x intervals are disjoint. y may leave the axis.
+# Fixed arm controls. They are not free parameters; the path still uses them.
 _ARM = (
-    (-4.50, -4.75, -4.25, 0.0, -0.06, 0.06),
-    (-3.55, -3.90, -3.20, 0.0, -0.08, 0.08),
-    (-2.60, -2.95, -2.25, 0.0, -0.10, 0.10),
-    (-1.70, -2.00, -1.40, 0.0, -0.12, 0.12),
+    (-4.50, 0.0, ION_HEIGHT),
+    (-3.55, 0.0, ION_HEIGHT),
+    (-2.60, 0.0, ION_HEIGHT),
+    (-1.70, 0.0, ION_HEIGHT),
 )
 N_ARM = len(_ARM)
 
-# Bend controls. The x intervals are disjoint and shorten toward the junction.
-# The last control sits just before the junction handle, so the polygon keeps
-# closing up through the two squares at the crossing.
-_INTERIOR = (
-    (-0.7263, -0.780, -0.680, 0.0009, 0.00, 0.06),
-    (-0.5925, -0.650, -0.550, 0.0034, 0.00, 0.09),
-    (-0.4762, -0.530, -0.440, 0.0076, 0.00, 0.12),
-    (-0.3751, -0.420, -0.340, 0.0133, 0.00, 0.16),
-    (-0.2874, -0.320, -0.260, 0.0207, 0.00, 0.20),
-    (-0.2114, -0.240, -0.190, 0.0302, 0.00, 0.26),
-    (-0.1459, -0.175, -0.130, 0.0429, 0.00, 0.32),
-)
-N_INTERIOR = len(_INTERIOR)
+# Developed bend controls. They pack tighter near the junction. ``bend_r``
+# scales this bow; the nominal radius reproduces these points. Each point
+# still has its own height.
+_INTERIOR_XY = np.array([
+    [-0.7263, 0.0009],
+    [-0.5925, 0.0034],
+    [-0.4762, 0.0076],
+    [-0.3751, 0.0133],
+    [-0.2874, 0.0207],
+    [-0.2114, 0.0302],
+    [-0.1459, 0.0429],
+], dtype=float)
+N_INTERIOR = len(_INTERIOR_XY)
 _Z_SPAN = HEIGHT_CAP_M / L_SCALE
+_R_SPAN = RADIUS_CAP_M / L_SCALE
 _Z_LO = ION_HEIGHT - _Z_SPAN
 _Z_HI = ION_HEIGHT + _Z_SPAN
-_CROSS_HI = CROSS_CAP_M / L_SCALE
+_CROSS_S = 0.1
+_MIRROR_ANGLE = 2.0 * np.pi / 3.0
+_MIRROR_HAT = np.array([np.cos(_MIRROR_ANGLE), np.sin(_MIRROR_ANGLE)])
+_CHORD_START = np.array([-1.0, 0.0])
+_CHORD_END = _CROSS_S * _MIRROR_HAT
+_CHORD_HAT = (_CHORD_END - _CHORD_START) / np.linalg.norm(_CHORD_END - _CHORD_START)
+_CHORD_ALONG = (_INTERIOR_XY - _CHORD_START) @ _CHORD_HAT
+_CHORD_SPINE = _CHORD_START + _CHORD_ALONG.reshape(-1, 1) * _CHORD_HAT
+_CHORD_OFFSET = _INTERIOR_XY - _CHORD_SPINE
+NOMINAL_BEND_R = float(np.max(np.linalg.norm(_CHORD_OFFSET, axis=1)))
 
 # ai, da, bi_x, bi_y, bo_x, bo_y, ci_l, co_l. Matches the developed junction.
 DEFAULT_JUNCTION = np.array([
     0.00000000e+00, 1.63798590e+00, 6.11348571e-01, 1.47929004e-01,
     1.94666468e+00, 5.90633914e-07, 1.00000011e+00, 4.99999973e+00,
 ])
+
 
 def symmetric_gate_offsets(offsets):
     """Mirror a transport waveform about mid-path.
@@ -68,6 +83,27 @@ def symmetric_gate_offsets(offsets):
     return values
 
 
+def interior_xy_from_radius(radius):
+    """Developed bend ``(x, y)``, scaled so the bow equals ``radius``.
+
+    The stations stay on the chord from the bend entrance to the crossing.
+    The developed perpendicular offset is scaled by ``radius / nominal``.
+    The nominal radius returns the developed control points.
+    """
+    if NOMINAL_BEND_R <= 0.0:
+        raise ValueError("developed bend has no radius")
+    scale = float(radius) / NOMINAL_BEND_R
+    return _CHORD_SPINE + scale * _CHORD_OFFSET
+
+
+def interior_xyz_from_rz(radius, height):
+    """Bend control ``(x, y, z)`` from one radius and the control heights."""
+    height = np.asarray(height, dtype=float).reshape(-1)
+    if height.size != N_INTERIOR:
+        raise ValueError("bend heights must have length {}".format(N_INTERIOR))
+    return np.column_stack([interior_xy_from_radius(radius), height])
+
+
 def _feature_table():
     rows = [
         ("ai", -0.25, 0.35),
@@ -78,21 +114,13 @@ def _feature_table():
         ("bo_y", 0.00, 0.35),
         ("ci_l", 0.60, 1.80),
         ("co_l", 3.50, 6.50),
+        ("bend_r", -_R_SPAN, _R_SPAN),
     ]
-    for index, (_x, x_lo, x_hi, _y, y_lo, y_hi) in enumerate(_ARM):
-        rows.append(("a{}_x".format(index), x_lo, x_hi))
-        rows.append(("a{}_y".format(index), y_lo, y_hi))
-        rows.append(("a{}_z".format(index), _Z_LO, _Z_HI))
-    for index, (_x, x_lo, x_hi, _y, y_lo, y_hi) in enumerate(_INTERIOR):
-        rows.append(("c{}_x".format(index), x_lo, x_hi))
-        rows.append(("c{}_y".format(index), y_lo, y_hi))
+    for index in range(N_INTERIOR):
         rows.append(("c{}_z".format(index), _Z_LO, _Z_HI))
     rows.extend([
-        ("bend_z", _Z_LO, _Z_HI),
-        ("cross_z", _Z_LO, _Z_HI),
         ("curve_a", 1.20, 5.50),
         ("curve_b", 0.60, 2.80),
-        ("cross_s", 0.06, _CROSS_HI),
     ])
     return tuple(rows)
 
@@ -105,32 +133,41 @@ _BOUNDS = _feature_table()
 class TransportDesign:
     """One Y junction and one round-trip trajectory through it.
 
-    ``arm_xyz`` and ``interior_xyz`` have shape ``(N, 3)``. The third column
-    is the ion height at that control, in trap heights. ``z_arm`` is the fixed
-    height at the start and at the end. ``z_bend`` is the height where the
-    arm meets the bend. ``z_cross`` is the height at the crossing.
+    ``bend_r`` is the shared radius of the bend controls from the RF null.
+    ``interior_z`` is the height of each developed bend control. ``(x, y)``
+    of those controls stays at the developed polygon. ``arm_xyz`` is fixed.
+    The start and end stay at 50 um.
     """
 
     junction: np.ndarray
-    arm_xyz: np.ndarray
-    interior_xyz: np.ndarray
+    bend_r: float
+    interior_z: np.ndarray
     curves: tuple
-    cross_s: float
+    arm_xyz: np.ndarray = field(default_factory=lambda: np.array(_ARM, dtype=float))
+    cross_s: float = _CROSS_S
     x_start: float = -5.0
     bend_x: float = -1.0
     handle: float = 0.12
     end_handle: float = 0.048
     arm_handle: float = 0.12
-    n_time_gates: int = 6
+    n_time_gates: int = 9
     gate_offsets: np.ndarray = field(default_factory=lambda: np.zeros(0))
     z_bend: float = ION_HEIGHT
     z_cross: float = ION_HEIGHT
     z_arm: float = field(init=False)
+    interior_xyz: np.ndarray = field(init=False)
 
     def __post_init__(self):
         self.junction = np.asarray(self.junction, dtype=float).reshape(-1).copy()
         if self.junction.size != 8:
             raise ValueError("junction controls must be 8 values")
+        self.bend_r = float(self.bend_r)
+        self.interior_z = np.asarray(self.interior_z, dtype=float).reshape(-1).copy()
+        if self.interior_z.size != N_INTERIOR:
+            raise ValueError(
+                "interior_z must have length {}".format(N_INTERIOR)
+            )
+        self.interior_xyz = interior_xyz_from_rz(self.bend_r, self.interior_z)
         self.arm_xyz = np.asarray(self.arm_xyz, dtype=float)
         if self.arm_xyz.shape != (N_ARM, 3):
             raise ValueError(
@@ -138,13 +175,6 @@ class TransportDesign:
                 "of each arm control".format(N_ARM)
             )
         self.arm_xyz = self.arm_xyz.copy()
-        self.interior_xyz = np.asarray(self.interior_xyz, dtype=float)
-        if self.interior_xyz.shape != (N_INTERIOR, 3):
-            raise ValueError(
-                "interior_xyz must have shape ({}, 3): x, y, and height "
-                "of each bend control".format(N_INTERIOR)
-            )
-        self.interior_xyz = self.interior_xyz.copy()
         if len(self.curves) != 2:
             raise ValueError("curves must be (a, b)")
         self.curves = (float(self.curves[0]), float(self.curves[1]))
@@ -166,7 +196,7 @@ class TransportDesign:
         if not self.bend_x > self.x_start:
             raise ValueError("bend_x must be greater than x_start")
         heights = np.concatenate([
-            self.arm_xyz[:, 2], self.interior_xyz[:, 2], [self.z_bend, self.z_cross],
+            self.arm_xyz[:, 2], self.interior_z, [self.z_bend, self.z_cross],
         ])
         if min(self.z_arm, float(heights.min())) <= 0.05:
             raise ValueError("ion height must stay above the chip")
@@ -187,16 +217,31 @@ class TransportDesign:
             value = np.asarray(value, dtype=float).reshape(-1)
             if value.size:
                 value = symmetric_gate_offsets(value)
+        if name == "bend_r" and not isinstance(value, property):
+            value = float(np.asarray(value, dtype=float).reshape(-1)[0])
+        if name == "interior_z":
+            value = np.asarray(value, dtype=float).reshape(-1).copy()
         object.__setattr__(self, name, value)
+        if name in ("bend_r", "interior_z") and hasattr(self, "bend_r") and hasattr(self, "interior_z"):
+            try:
+                object.__setattr__(
+                    self,
+                    "interior_xyz",
+                    interior_xyz_from_rz(self.bend_r, self.interior_z),
+                )
+            except Exception:
+                pass
 
 
 def within_transport_caps(design):
-    """Crossing distance and every free height stay within 10 um of the standard."""
+    """Crossing, bend radius, and control heights stay within 15 um of the RF center."""
     if design.cross_s * L_SCALE > CROSS_CAP_M + 1e-12:
+        return False
+    if abs(float(design.bend_r)) * L_SCALE > RADIUS_CAP_M + 1e-12:
         return False
     heights = np.concatenate([
         design.arm_xyz[:, 2],
-        design.interior_xyz[:, 2],
+        design.interior_z,
         [design.z_bend, design.z_cross],
     ])
     deviation_m = np.abs(heights - ION_HEIGHT) * L_SCALE
@@ -221,15 +266,14 @@ class DesignSpace:
         return len(self.names)
 
     def nominal_design(self):
-        """Developed junction. The path starts at 50 um and may leave it later."""
-        arm = np.array([[row[0], row[3], ION_HEIGHT] for row in _ARM])
-        interior = np.array([[row[0], row[3], ION_HEIGHT] for row in _INTERIOR])
+        """Developed junction. Bend radius is zero; height stays at 50 um."""
         return TransportDesign(
             junction=DEFAULT_JUNCTION.copy(),
-            arm_xyz=arm,
-            interior_xyz=interior,
+            bend_r=NOMINAL_BEND_R,
+            interior_z=np.full(N_INTERIOR, ION_HEIGHT),
             curves=(3.0, 1.5),
-            cross_s=0.1,
+            arm_xyz=np.array(_ARM, dtype=float),
+            cross_s=_CROSS_S,
             x_start=self.x_start,
             bend_x=self.bend_x,
             handle=self.handle,
@@ -245,12 +289,9 @@ class DesignSpace:
     def pack(self, design):
         values = np.concatenate([
             np.asarray(design.junction, dtype=float).reshape(8),
-            np.asarray(design.arm_xyz, dtype=float).reshape(-1),
-            np.asarray(design.interior_xyz, dtype=float).reshape(-1),
-            [
-                design.z_bend, design.z_cross,
-                design.curves[0], design.curves[1], design.cross_s,
-            ],
+            [float(design.bend_r)],
+            np.asarray(design.interior_z, dtype=float).reshape(N_INTERIOR),
+            [design.curves[0], design.curves[1]],
         ])
         if values.size != self.dim:
             raise ValueError("packed design has the wrong length")
@@ -262,22 +303,21 @@ class DesignSpace:
             raise ValueError(
                 "design vector has length {}, expected {}".format(x.size, self.dim)
             )
-        n_arm = N_ARM * 3
-        n_xyz = N_INTERIOR * 3
-        cursor = 8 + n_arm
+        z0 = 9
         return TransportDesign(
             junction=x[:8],
-            arm_xyz=x[8:cursor].reshape(N_ARM, 3),
-            interior_xyz=x[cursor:cursor + n_xyz].reshape(N_INTERIOR, 3),
-            z_bend=x[cursor + n_xyz],
-            z_cross=x[cursor + n_xyz + 1],
-            curves=(x[cursor + n_xyz + 2], x[cursor + n_xyz + 3]),
-            cross_s=x[cursor + n_xyz + 4],
+            bend_r=x[8],
+            interior_z=x[z0:z0 + N_INTERIOR],
+            curves=(x[-2], x[-1]),
+            arm_xyz=np.array(_ARM, dtype=float),
+            cross_s=_CROSS_S,
             x_start=self.x_start,
             bend_x=self.bend_x,
             handle=self.handle,
             end_handle=self.end_handle,
             arm_handle=self.arm_handle,
+            z_bend=ION_HEIGHT,
+            z_cross=ION_HEIGHT,
         )
 
     def clip(self, vector):
@@ -297,30 +337,18 @@ class DesignSpace:
 
         ``fraction`` 1 uses the full bounds. Smaller values stay closer to
         the developed junction and are more likely to confine. ``cap_fraction``
-        overrides that shrink for the bend heights and the crossing distance,
-        whose full bounds are the 10 um caps.
+        overrides that shrink for the bend radius and the control heights,
+        whose full bounds are the 15 um RF-center caps.
         """
-        if not 0.0 <= fraction <= 1.0:
-            raise ValueError("fraction must be between 0 and 1")
-        if cap_fraction is None:
-            cap_fraction = fraction
-        if not 0.0 <= cap_fraction <= 1.0:
-            raise ValueError("cap_fraction must be between 0 and 1")
-        center = self.nominal()
-        lo = center + fraction * (self.lower - center)
-        hi = center + fraction * (self.upper - center)
-        for index, name in enumerate(self.names):
-            if name == "cross_s" or name.endswith("_z"):
-                lo[index] = center[index] + cap_fraction * (self.lower[index] - center[index])
-                hi[index] = center[index] + cap_fraction * (self.upper[index] - center[index])
+        lo, hi = self._bounds(fraction, cap_fraction)
         unit = rng.random((int(n), self.dim))
         return lo + unit * (hi - lo)
 
     def sample_latin(self, rng, n, fraction=1.0, cap_fraction=None):
         """Space-filling samples. Each coordinate is split into ``n`` equal bins.
 
-        One design falls in each bin, so the height, crossing, junction, and
-        bend controls cover their ranges evenly instead of clumping.
+        One design falls in each bin, so the radius, the heights, the
+        junction, and ``(a, b)`` cover their ranges evenly instead of clumping.
         """
         from scipy.stats.qmc import LatinHypercube
 
@@ -339,7 +367,7 @@ class DesignSpace:
         lo = center + fraction * (self.lower - center)
         hi = center + fraction * (self.upper - center)
         for index, name in enumerate(self.names):
-            if name == "cross_s" or name.endswith("_z"):
+            if name == "bend_r" or name.endswith("_z"):
                 lo[index] = center[index] + cap_fraction * (self.lower[index] - center[index])
                 hi[index] = center[index] + cap_fraction * (self.upper[index] - center[index])
         return lo, hi

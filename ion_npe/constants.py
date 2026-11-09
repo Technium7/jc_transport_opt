@@ -29,11 +29,12 @@ HBAR = ct.hbar
 # Default ion height. Locked on the straight arms and at the crossing.
 ION_HEIGHT = ION_HEIGHT_M / L_SCALE
 
-# Collection and optimization stay inside these limits.
-# Bend controls may leave 50 um by at most 10 um, and the crossing lies
-# at most 10 um from the origin along the +120 degree line.
-HEIGHT_CAP_M = 10e-6
-CROSS_CAP_M = 10e-6
+# Collection and optimization stay inside these limits. Bend controls may leave
+# the RF null by at most 15 um in radius and in height, and the crossing lies
+# at most 15 um from the origin along the +120 degree line.
+HEIGHT_CAP_M = 15e-6
+RADIUS_CAP_M = 15e-6
+CROSS_CAP_M = 15e-6
 
 # Fixed electrode half-gap and RF rail width, in trap heights.
 RF_SEP = 1.0
@@ -48,11 +49,15 @@ OMEGA_RAD = 2.0 * np.pi * F_RADIAL
 KAPPA_AX = OMEGA_AX ** 2 * MASS * L_SCALE ** 2 / CHARGE
 KAPPA_RAD = OMEGA_RAD ** 2 * MASS * L_SCALE ** 2 / CHARGE
 
-# Each target DC well is held for 100 ns. The stray field is the residual of a
-# real voltage solution: 100 V/m is the standard deviation of its maximum on
-# each path-frame axis. Twenty independent draws per design give the stochastic
-# network a mean and a variance to fit. A quiet run sets the amplitude to 0.
+# Each target DC well is held for 100 ns. Transport uses the electrode field of
+# the least-squares voltage solution on the segmented DC electrodes (plus the
+# RF pseudopotential). The ideal harmonic well is only an optional comparison.
+# The stray field is the residual of a real voltage solution: 100 V/m is the
+# standard deviation of its maximum on each path-frame axis. Twenty independent
+# draws per design give the stochastic network a mean and a variance to fit. A
+# quiet run sets the amplitude to 0.
 VOLTAGE_UPDATE_S = 100e-9
+FORCE_ELECTRODE_VOLTAGES = "electrode_voltages"
 NOISE_STD_VM = 100.0
 NOISE_SEEDS = tuple(range(20))
 TRANSPORT_SPEED_M_S = 7.5

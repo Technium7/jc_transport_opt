@@ -1,9 +1,10 @@
 """Waveform-gate search, matching the straight-line transport optimizer.
 
-That search cut the phonon number by about 10x by moving five intermediate
+That search cut the phonon number by about 10x by moving the intermediate
 gates of an otherwise fixed transport and keeping the cross-entropy cloud on
 the designs that had just been simulated. The junction and the spatial bend
 stay at the nominal design. Only the interior samples of the time law move.
+With a symmetric waveform there are four free paired gates.
 """
 
 from pathlib import Path
@@ -11,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from .design import DesignSpace, symmetric_gate_offsets
-from .simulate import simulate_design, simulation_settings, stray_field_line, total_heating
+from .simulate import force_line, simulate_design, simulation_settings, stray_field_line, total_heating
 from .train import train_predictor
 from .trajectory import s_of_tau, time_gate_samples
 
@@ -139,8 +140,8 @@ def optimize_schedule(
     """Train on waveforms near the nominal path, then cross-entropy on the gates.
 
     The junction, the bend, and ``(a, b)`` stay at the developed design. The
-    five interior time gates move, with the same role as the intermediate
-    position gates in the straight-line search.
+    eight interior time gates move, with four free after mid-path symmetry,
+    the same role as the intermediate position gates in the straight-line search.
     """
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -151,7 +152,12 @@ def optimize_schedule(
     n_gates = int(base.n_time_gates)
     rng = np.random.default_rng(seed)
 
-    print("nominal waveform, {}".format(stray_field_line(simulate_kwargs)), flush=True)
+    print(
+        "nominal waveform, {}, {}".format(
+            force_line(simulate_kwargs), stray_field_line(simulate_kwargs)
+        ),
+        flush=True,
+    )
     nominal_q, nominal_total = _simulate_rows(base, np.zeros((1, n_gates - 1)), simulate_kwargs)
     baseline = float(nominal_total[0])
 
@@ -248,6 +254,7 @@ def optimize_schedule(
     factor = baseline / best_total if best_total > 0.0 else np.inf
     lines = [
         "junction and bend fixed at the nominal design",
+        force_line(simulate_kwargs),
         stray_field_line(simulate_kwargs),
         "interior time gates: {}".format(n_gates - 1),
         "training waveforms before the search: {}".format(n_before),

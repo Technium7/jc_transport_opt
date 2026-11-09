@@ -4,8 +4,10 @@ import unittest
 
 import numpy as np
 
-from ion_npe.constants import CROSS_CAP_M, HEIGHT_CAP_M, L_SCALE
-from ion_npe.design import BoxGaussian, DesignSpace, within_transport_caps
+from ion_npe.constants import CROSS_CAP_M, HEIGHT_CAP_M, L_SCALE, RADIUS_CAP_M
+from ion_npe.design import (
+    NOMINAL_BEND_R, BoxGaussian, DesignSpace, N_INTERIOR, within_transport_caps,
+)
 
 
 class DesignTests(unittest.TestCase):
@@ -15,28 +17,34 @@ class DesignTests(unittest.TestCase):
         vector = space.pack(design)
         restored = space.unpack(vector)
         np.testing.assert_allclose(restored.junction, design.junction)
-        np.testing.assert_allclose(restored.arm_xyz, design.arm_xyz)
+        self.assertEqual(restored.bend_r, design.bend_r)
+        np.testing.assert_allclose(restored.interior_z, design.interior_z)
         np.testing.assert_allclose(restored.interior_xyz, design.interior_xyz)
         self.assertEqual(restored.curves, design.curves)
         self.assertEqual(restored.z_arm, design.z_arm)
         self.assertEqual(restored.z_bend, design.z_bend)
         self.assertEqual(restored.z_cross, design.z_cross)
         self.assertEqual(restored.cross_s, design.cross_s)
-        self.assertAlmostEqual(vector[space.names.index("c0_x")], -0.7263)
-        self.assertEqual(vector[space.names.index("bend_z")], 1.0)
-        self.assertEqual(vector[space.names.index("cross_z")], 1.0)
+        self.assertAlmostEqual(vector[space.names.index("bend_r")], NOMINAL_BEND_R)
+        self.assertAlmostEqual(design.interior_xyz[0, 0], -0.7263)
+        self.assertAlmostEqual(design.interior_xyz[0, 1], 0.0009)
+        self.assertEqual(vector[space.names.index("c0_z")], 1.0)
         self.assertEqual(vector[space.names.index("c6_z")], 1.0)
         self.assertEqual(vector[space.names.index("curve_a")], 3.0)
         self.assertEqual(vector[space.names.index("curve_b")], 1.5)
-        self.assertEqual(vector[space.names.index("cross_s")], 0.1)
-        self.assertNotIn("z_arm", space.names)
+        self.assertNotIn("cross_s", space.names)
+        self.assertNotIn("c0_r", space.names)
+        self.assertNotIn("a0_x", space.names)
         self.assertEqual(design.z_arm, 1.0)
         self.assertEqual(design.z_cross, 1.0)
-        self.assertEqual(len(design.interior_xyz), 7)
+        self.assertEqual(len(design.interior_z), 7)
+        self.assertEqual(N_INTERIOR, 7)
         spacing = np.diff(design.interior_xyz[:, 0])
         self.assertLess(spacing[-1], spacing[0])
         self.assertTrue(np.all(vector >= space.lower))
         self.assertTrue(np.all(vector <= space.upper))
+        self.assertEqual(design.n_time_gates, 9)
+        self.assertEqual(len(design.gate_offsets), 8)
 
     def test_samples_stay_inside_a_shrunk_box(self):
         space = DesignSpace()
@@ -48,23 +56,23 @@ class DesignTests(unittest.TestCase):
         self.assertTrue(np.all(drawn >= lo - 1e-12))
         self.assertTrue(np.all(drawn <= hi + 1e-12))
 
-    def test_height_and_crossing_are_capped_at_ten_micrometers(self):
+    def test_radius_and_height_are_capped_at_fifteen_micrometers(self):
         space = DesignSpace()
         for name in space.names:
-            if not name.endswith("_z"):
-                continue
             index = space.names.index(name)
-            self.assertAlmostEqual((space.upper[index] - 1.0) * L_SCALE, HEIGHT_CAP_M)
-            self.assertAlmostEqual((1.0 - space.lower[index]) * L_SCALE, HEIGHT_CAP_M)
-        cross = space.names.index("cross_s")
-        self.assertAlmostEqual(space.upper[cross] * L_SCALE, CROSS_CAP_M)
+            if name.endswith("_z"):
+                self.assertAlmostEqual((space.upper[index] - 1.0) * L_SCALE, HEIGHT_CAP_M)
+                self.assertAlmostEqual((1.0 - space.lower[index]) * L_SCALE, HEIGHT_CAP_M)
+            if name == "bend_r":
+                self.assertAlmostEqual(space.upper[index] * L_SCALE, RADIUS_CAP_M)
+                self.assertAlmostEqual(-space.lower[index] * L_SCALE, RADIUS_CAP_M)
         drawn = space.sample(np.random.default_rng(2), 24, fraction=0.45, cap_fraction=1.0)
         for row in drawn:
             design = space.unpack(row)
             self.assertTrue(within_transport_caps(design))
             self.assertLessEqual(design.cross_s * L_SCALE, CROSS_CAP_M + 1e-12)
         outside = space.nominal_design()
-        outside.cross_s = CROSS_CAP_M / L_SCALE + 0.05
+        outside.bend_r = RADIUS_CAP_M / L_SCALE + 0.05
         self.assertFalse(within_transport_caps(outside))
 
     def test_latin_puts_one_sample_in_each_bin(self):

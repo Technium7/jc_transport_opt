@@ -7,18 +7,60 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from matplotlib.collections import LineCollection
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 from .constants import ION_HEIGHT_M, L_SCALE, TRANSPORT_SPEED_M_S
 from .simulate import total_heating
 from .trajectory import arm_polygon, control_polygon, dynamics_grid, path_geometry, time_gate_samples
 
+# Same electrode system as ``control._responses`` / ``build_junction``.
+_RF_FACE = "#4C78A8"
+_DC_FACE = "#F2C14E"
+_RF_EDGE = "#2F5A80"
+_DC_EDGE = "#A67C1F"
+
+
+def _draw_junction_electrodes(ax, junction, rf_alpha=0.38, dc_alpha=0.28, lw=0.25):
+    """Fill the RF and DC polygons used for the unit-volt response function."""
+    for electrode in junction:
+        if electrode.name == "r":
+            face, edge, alpha, zorder = _RF_FACE, _RF_EDGE, rf_alpha, 1
+        else:
+            face, edge, alpha, zorder = _DC_FACE, _DC_EDGE, dc_alpha, 0
+        for poly in electrode.paths:
+            closed = np.vstack([poly, poly[:1]])
+            ax.fill(
+                closed[:, 0], closed[:, 1],
+                facecolor=face, edgecolor=edge, alpha=alpha, lw=lw, zorder=zorder,
+            )
+
+
+def _electrode_xy(junction, dc_only=False):
+    """Stack electrode vertices from the response-function junction.
+
+    The RF rails continue to the chip edge. Framing plots on that full span
+    hides the segmented DC electrodes, so ``dc_only`` keeps the DC extents.
+    """
+    points = []
+    for electrode in junction:
+        if dc_only and electrode.name == "r":
+            continue
+        for poly in electrode.paths:
+            points.append(np.asarray(poly, dtype=float)[:, :2])
+    if not points:
+        return np.zeros((0, 2))
+    return np.vstack(points)
+
 
 def plot_trajectory(design, path, out):
-    """RF rails, the path, and the bend control points.
+    """RF and DC electrodes, the path, and the bend control points.
 
-    Squares are the clamped ends of the bend. Triangles are the arm controls
-    and circles are the bend controls. Both are free in ``(x, y, z)``. The
-    ion still starts and ends at 50 um.
+    The electrode fill is the same ``build_junction`` system used to compute
+    the DC/RF response function. Squares are the clamped ends of the bend.
+    Triangles are the fixed arm controls and circles are the bend controls.
+    Bend controls are RF-null radius and height. The ion still starts and
+    ends at 50 um.
     """
     from .junction import build_junction
 
@@ -33,12 +75,7 @@ def plot_trajectory(design, path, out):
     fig, axes = plt.subplots(1, 2, figsize=(10.2, 4.5))
     ax = axes[0]
     junction = build_junction(design.junction)
-    for electrode in junction:
-        if electrode.name != "r":
-            continue
-        for poly in electrode.paths:
-            closed = np.vstack([poly, poly[:1]])
-            ax.fill(closed[:, 0], closed[:, 1], color="#4C78A8", alpha=0.28, lw=0)
+    _draw_junction_electrodes(ax, junction)
     z_lo = float(height_um.min())
     z_hi = float(height_um.max())
     if z_hi - z_lo < 0.5:
@@ -61,7 +98,7 @@ def plot_trajectory(design, path, out):
         free[:, 0], free[:, 1], s=32, marker="o", facecolors="none",
         edgecolors="#E45756", linewidths=1.2, zorder=6, label="bend controls",
     )
-    span = np.vstack([path[:, :2], controls[:, :2]])
+    span = np.vstack([path[:, :2], controls[:, :2], _electrode_xy(junction, dc_only=True)])
     pad = 0.35
     ax.set_xlim(span[:, 0].min() - pad, span[:, 0].max() + pad)
     ax.set_ylim(span[:, 1].min() - pad, span[:, 1].max() + pad)
@@ -69,8 +106,24 @@ def plot_trajectory(design, path, out):
     ax.set_xlabel("x (trap heights)")
     ax.set_ylabel("y (trap heights)")
     ax.set_title("trajectory and control points")
-    ax.legend(frameon=False, fontsize=8, loc="upper left")
+    ax.legend(
+        handles=[
+            Patch(facecolor=_RF_FACE, edgecolor=_RF_EDGE, alpha=0.5, label="RF"),
+            Patch(facecolor=_DC_FACE, edgecolor=_DC_EDGE, alpha=0.5, label="DC"),
+            Line2D([0], [0], marker="s", color="#333333", ls="none", label="bend ends"),
+            Line2D(
+                [0], [0], marker="^", color="#54A24B", ls="none",
+                markerfacecolor="none", label="arm controls",
+            ),
+            Line2D(
+                [0], [0], marker="o", color="#E45756", ls="none",
+                markerfacecolor="none", label="bend controls",
+            ),
+        ],
+        frameon=False, fontsize=8, loc="upper left",
+    )
     inset = ax.inset_axes([0.20, 0.55, 0.74, 0.40])
+    _draw_junction_electrodes(inset, junction, rf_alpha=0.45, dc_alpha=0.32)
     inset.scatter(
         path[:, 0], path[:, 1], c=height_um, s=8, cmap="viridis",
         vmin=z_lo, vmax=z_hi, zorder=3,
@@ -159,8 +212,10 @@ def _height_profile(design):
 def plot_best_design(design, out, reference=None, total_quanta=None):
     """Junction, bend controls, transport waveform, and height along the path.
 
-    The path is colored by the ion's speed. ``reference`` is the nominal
-    design, drawn dashed on the speed and height panels.
+    The path is colored by the ion's speed. The filled electrodes are the RF
+    rails and segmented DC electrodes from ``build_junction``, the same set
+    used to compute the unit-volt response function. ``reference`` is the
+    nominal design, drawn dashed on the speed and height panels.
     """
     from .junction import build_junction
 
@@ -184,15 +239,7 @@ def plot_best_design(design, out, reference=None, total_quanta=None):
     height = fig.add_subplot(grid[2, :])
     junction = build_junction(design.junction)
 
-    def rails(target):
-        for electrode in junction:
-            if electrode.name != "r":
-                continue
-            for poly in electrode.paths:
-                closed = np.vstack([poly, poly[:1]])
-                target.fill(closed[:, 0], closed[:, 1], color="#4C78A8", alpha=0.28, lw=0)
-
-    rails(ax)
+    _draw_junction_electrodes(ax, junction)
     drawn = _colored_path(ax, xyz[:, :2], speed, 0.0, vmax, lw=2.4)
     fig.colorbar(drawn, ax=ax, fraction=0.025, pad=0.01, label="speed (m/s)")
     _knots, samples = time_gate_samples(design.curves, design.n_time_gates, design.gate_offsets)
@@ -202,7 +249,7 @@ def plot_best_design(design, out, reference=None, total_quanta=None):
         xyz[gate_index, 0], xyz[gate_index, 1], s=34, marker="D",
         facecolors="white", edgecolors="#333333", linewidths=0.9, zorder=7,
     )
-    span = xyz[:, :2]
+    span = np.vstack([xyz[:, :2], _electrode_xy(junction, dc_only=True)])
     pad = 0.35
     ax.set_xlim(span[:, 0].min() - pad, span[:, 0].max() + pad)
     ax.set_ylim(span[:, 1].min() - pad, span[:, 1].max() + pad)
@@ -213,10 +260,11 @@ def plot_best_design(design, out, reference=None, total_quanta=None):
     if total_quanta is not None:
         title = "best design, {:.3g} quanta".format(float(total_quanta))
     ax.set_title(title)
-    from matplotlib.lines import Line2D
 
     ax.legend(
         handles=[
+            Patch(facecolor=_RF_FACE, edgecolor=_RF_EDGE, alpha=0.5, label="RF"),
+            Patch(facecolor=_DC_FACE, edgecolor=_DC_EDGE, alpha=0.5, label="DC"),
             Line2D([0], [0], color="#9a9a9a", ls="--", lw=1.2, label="nominal waveform"),
             Line2D([0], [0], color="#4C78A8", lw=1.6, label="optimized waveform"),
             Line2D(
@@ -227,7 +275,7 @@ def plot_best_design(design, out, reference=None, total_quanta=None):
         frameon=False, fontsize=8, loc="upper left",
     )
 
-    rails(bend)
+    _draw_junction_electrodes(bend, junction, rf_alpha=0.45, dc_alpha=0.32)
     _colored_path(bend, xyz[:, :2], speed, 0.0, vmax, lw=2.0)
     bend.plot(controls[:, 0], controls[:, 1], color="#E45756", lw=0.8, ls="--", zorder=4)
     bend.scatter(fixed[:, 0], fixed[:, 1], s=26, marker="s", color="#333333", zorder=5, label="bend ends")

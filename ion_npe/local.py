@@ -18,7 +18,7 @@ from .design import DesignSpace
 from .joint import (
     N_GATES, _admissible, _bounds, _location, _shifts, _simulate_row, _unpack, project_joint_row,
 )
-from .simulate import simulation_settings, stray_field_line, total_heating
+from .simulate import force_line, simulation_settings, stray_field_line, total_heating
 from .train import log_rmse, train_predictor
 
 MIN_TRAIN = 1000
@@ -51,9 +51,9 @@ def neighborhood_half(space, lower, upper):
     for index, name in enumerate(names):
         if name.startswith("g"):
             half[index] = 0.08
-        elif name.endswith("_z"):
+        elif name == "bend_r" or name.endswith("_z"):
             half[index] = 0.40 * span[index]
-        elif name in ("curve_a", "curve_b", "cross_s"):
+        elif name in ("curve_a", "curve_b"):
             half[index] = 0.30 * span[index]
         else:
             half[index] = 0.20 * span[index]
@@ -493,6 +493,7 @@ def optimize_local(
     lines = [
         "junction, trajectory, and waveform, each updated or kept"
         if cooptimize else "local search starting at the nominal path",
+        force_line(simulate_kwargs),
         stray_field_line(simulate_kwargs),
         "start and end height: 50 um",
         "designs simulated: {}".format(len(totals)),
@@ -528,13 +529,12 @@ def optimize_local(
         "junction shift from nominal, unit norm: {:.4g}".format(junction_shift),
         "trajectory shift from nominal, unit norm: {:.4g}".format(path_shift),
         "waveform shift from nominal, gate norm: {:.4g}".format(gate_shift),
-        "best crossing distance: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
-        "best crossing height: {:.2f} um".format(design.z_cross * L_SCALE * 1e6),
-        "best bend entrance: {:.2f} um".format(design.z_bend * L_SCALE * 1e6),
-        "best arm height: {:.2f} to {:.2f} um".format(
-            design.arm_xyz[:, 2].min() * L_SCALE * 1e6,
-            design.arm_xyz[:, 2].max() * L_SCALE * 1e6,
+        "best bend radius: {:.2f} um".format(design.bend_r * L_SCALE * 1e6),
+        "best bend height: {:.2f} to {:.2f} um".format(
+            design.interior_z.min() * L_SCALE * 1e6,
+            design.interior_z.max() * L_SCALE * 1e6,
         ),
+        "best crossing distance: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
     ]
     text = "\n".join(lines) + "\n"
     (out / "summary.txt").write_text(text)

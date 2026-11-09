@@ -4,11 +4,18 @@ import unittest
 
 import numpy as np
 
-from ion_npe.constants import L_SCALE, SIM_DT, TRANSPORT_SPEED_M_S, VOLTAGE_UPDATE_S
+from ion_npe.constants import (
+    FORCE_ELECTRODE_VOLTAGES,
+    L_SCALE,
+    SIM_DT,
+    TRANSPORT_SPEED_M_S,
+    VOLTAGE_UPDATE_S,
+)
 from ion_npe.control import electrode_acceleration, solve_transport_voltages
 from ion_npe.design import DesignSpace
 from ion_npe.dynamics import hold_steps, integrate_acceleration, path_directions
 from ion_npe.junction import build_junction, path_frequencies
+from ion_npe.simulate import force_line, simulation_settings
 from ion_npe.trajectory import dynamics_grid
 
 
@@ -77,6 +84,13 @@ class ControlVoltageTests(unittest.TestCase):
         )
         self.assertTrue(np.isfinite(result["final_quanta"]).all())
         self.assertLess(float(np.linalg.norm(result["final_offset_um"])), 20.0)
+
+    def test_simulation_defaults_to_solved_electrode_voltages(self):
+        settings = simulation_settings({"noise_std_Vm": 0.0, "seeds": (0,)})
+        self.assertEqual(settings["force"], FORCE_ELECTRODE_VOLTAGES)
+        self.assertEqual(force_line(settings), "force: solved DC electrode voltages")
+        with self.assertRaisesRegex(ValueError, "solved DC electrode voltages"):
+            simulation_settings({"force": "harmonic_well", "noise_std_Vm": 0.0, "seeds": (0,)})
 
 
 if __name__ == "__main__":

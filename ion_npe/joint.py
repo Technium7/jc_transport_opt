@@ -13,11 +13,12 @@ from .constants import L_SCALE
 from .dataset import design_is_admissible
 from .design import DesignSpace, symmetric_gate_offsets
 from .schedule import schedule_is_admissible
-from .simulate import simulate_design, simulation_settings, stray_field_line, total_heating
+from .simulate import force_line, simulate_design, simulation_settings, stray_field_line, total_heating
 from .active import active_ranking
 from .train import finetune, train_predictor
 
-N_GATES = 5
+# Eight interior gates. Symmetry leaves four free paired controls.
+N_GATES = 8
 GATE_LIMIT = 0.10
 
 
@@ -34,9 +35,9 @@ def _std(space, lower, upper, gate_std):
     for index, name in enumerate(names):
         if name.startswith("g"):
             std[index] = gate_std
-        elif name.endswith("_z"):
+        elif name == "bend_r" or name.endswith("_z"):
             std[index] = 0.22 * span[index]
-        elif name in ("curve_a", "curve_b", "cross_s"):
+        elif name in ("curve_a", "curve_b"):
             std[index] = 0.12 * span[index]
         else:
             std[index] = 0.08 * span[index]
@@ -69,7 +70,10 @@ def _saved_gates():
     path = Path("outputs/schedule/schedule.npz")
     if not path.exists():
         return np.zeros(N_GATES)
-    return np.asarray(np.load(path)["best_offsets"], dtype=float).reshape(N_GATES)
+    gates = np.asarray(np.load(path)["best_offsets"], dtype=float).reshape(-1)
+    if gates.size != N_GATES:
+        return np.zeros(N_GATES)
+    return gates
 
 
 def _simulate_row(space, row, simulate_kwargs):
@@ -513,6 +517,7 @@ def optimize_joint(
 
     lines = [
         "training set is the latin sample of junction, trajectory, and waveform",
+        force_line(simulate_kwargs),
         stray_field_line(simulate_kwargs),
         "start and end height: 50 um",
         "training designs: {}".format(int(n_train)),
@@ -546,13 +551,12 @@ def optimize_joint(
         "junction shift from nominal, unit norm: {:.4g}".format(junction_shift),
         "trajectory shift from nominal, unit norm: {:.4g}".format(path_shift),
         "waveform shift from nominal, gate norm: {:.4g}".format(gate_shift),
-        "plotted crossing distance: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
-        "plotted crossing height: {:.2f} um".format(design.z_cross * L_SCALE * 1e6),
-        "plotted bend entrance: {:.2f} um".format(design.z_bend * L_SCALE * 1e6),
-        "plotted arm height: {:.2f} to {:.2f} um".format(
-            design.arm_xyz[:, 2].min() * L_SCALE * 1e6,
-            design.arm_xyz[:, 2].max() * L_SCALE * 1e6,
+        "plotted bend radius: {:.2f} um".format(design.bend_r * L_SCALE * 1e6),
+        "plotted bend height: {:.2f} to {:.2f} um".format(
+            design.interior_z.min() * L_SCALE * 1e6,
+            design.interior_z.max() * L_SCALE * 1e6,
         ),
+        "plotted crossing distance: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
     ]
     text = "\n".join(lines) + "\n"
     (out / "summary.txt").write_text(text)

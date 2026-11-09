@@ -1,16 +1,16 @@
 # Ion trap junction design with a stochastic network
 
-This project simulates Y-junction ion transport and co-optimizes the junction geometry together with a three-dimensional trajectory. The ion starts and ends at 50 μm. Along the arm, through the bend, and at the crossing, the path controls are free in `(x, y, z)`. The bend controls are packed more tightly near the junction. In data collection and in the search, every free height stays within 10 μm of 50 μm, and the crossing stays within 10 μm of the origin along the +120° line. The ion's height along the simulated path is held to that same 10 μm band.
+This project simulates Y-junction ion transport and co-optimizes the junction geometry together with a three-dimensional trajectory. The ion starts and ends at 50 μm. The bend keeps the developed control-point shape. `bend_r` scales that bow, and the nominal radius is the developed bow. Training also varies the height of each control. Radius and height each stay within 15 μm of the RF center, and the ion's height along the simulated path stays in that same band. The transport waveform is symmetric about mid-path, so eight interior gates give four free paired controls.
 
-The dynamics are the developed symplectic integrator. The RF pseudopotential comes from the junction electrodes. The DC confinement is the target harmonic well along the path: it is held for 100 ns between updates, with no stray field unless `--noise` is set. A network predicts the final motional quanta. A stochastic network injects input-dependent noise into its first hidden layer and is trained so that noise reproduces the spread of the simulated heating. Training is Adam followed by full-batch L-BFGS. A cross-entropy loop uses that prediction to choose which designs to simulate, fine-tunes the network the same way, and refits the sampling distribution to the best simulated designs.
+The dynamics are the developed symplectic integrator. The RF pseudopotential comes from the junction electrodes. The default DC force is the electrode field of the least-squares voltage solution on the segmented DC electrodes: each 100 ns update is solved for the target well, then the ion is integrated in that held field. The ideal harmonic well is only an optional comparison. The stray field is off unless `--noise` is set. A network predicts the final motional quanta. A stochastic network injects input-dependent noise into its first hidden layer and is trained so that noise reproduces the spread of the simulated heating. Training is Adam followed by full-batch L-BFGS. A cross-entropy loop uses that prediction to choose which designs to simulate, fine-tunes the network the same way, and refits the sampling distribution to the best simulated designs.
 
 ## Layout
 
 | Path | Role |
 | --- | --- |
-| `ion_npe/design.py` | Junction controls plus seven bend controls `(x, y, z)` |
+| `ion_npe/design.py` | Junction controls, one bend radius, and the bend-control heights |
 | `ion_npe/junction.py` | Symmetric Y-junction and the RF Laplacian |
-| `ion_npe/trajectory.py` | Round-trip path. Bend controls are `(x, y, z)`, denser near the junction |
+| `ion_npe/trajectory.py` | Round-trip path. Bend controls are RF-null radius and height |
 | `ion_npe/dynamics.py` | Path frame, stray field, velocity Verlet |
 | `ion_npe/simulate.py` | One design in, final quanta out |
 | `ion_npe/parallel.py` | Split a simulation batch across SLURM tasks |
@@ -22,7 +22,7 @@ The dynamics are the developed symplectic integrator. The RF pseudopotential com
 | `ion_npe/study.py` | Nominal-centered data, Adam+L-BFGS, and repeated active rounds |
 | `ion_npe/plotting.py` | Path, loss, and search figures |
 
-The design vector is the eight junction controls `ai, da, bi_x, bi_y, bo_x, bo_y, ci_l, co_l`, then four arm controls and seven bend controls `(x, y, z)`, then `bend_z`, `cross_z`, the time-profile pair `(a, b)`, and `cross_s`. The start and the end stay at 50 μm. Also fixed are the ion mass, RF gap and width, RF voltage and frequency, transport speed, and the target axial and radial frequencies.
+The design vector is the eight junction controls `ai, da, bi_x, bi_y, bo_x, bo_y, ci_l, co_l`, one bend radius `bend_r`, the seven bend-control heights `c0_z` … `c6_z`, and the time-profile pair `(a, b)`. Joint and nearby searches also append the eight symmetric waveform gates. At the nominal radius the bend `(x, y)` is the developed polygon. The arm path, the bend entrance, the crossing height, and the crossing distance stay at the developed design. The start and the end stay at 50 μm. Also fixed are the ion mass, RF gap and width, RF voltage and frequency, transport speed, and the target axial and radial frequencies.
 
 ## Run
 
@@ -47,7 +47,7 @@ sbatch scripts/mehta.sbatch nearby -o outputs/electrodes --noise 0 --seeds 0 -n 
 
 `--workers` is the local process pool, used when the command is not inside that step. The saved designs match a serial run with the same `--seed` when the cover is random. Training stays on rank 0: Adam, then full-batch L-BFGS.
 
-`study` turns the stray field off. It fills a fine neighborhood of the nominal path with a Latin hypercube, and fills the wider junction and trajectory range with a second, larger hypercube. Height and crossing stay inside the 10 μm caps. It holds some designs out and reports log10 RMSE, Gaussian NLL, and one-standard-deviation coverage for Adam and for Adam followed by L-BFGS. Active rounds then screen another space-filling pool and simulate the low-phonon designs where the network is most uncertain. `--fine` and `-n` set the two sample counts. `--iterations` is the number of active rounds.
+`study` turns the stray field off. It fills a fine neighborhood of the nominal path with a Latin hypercube, and fills the wider junction and trajectory range with a second, larger hypercube. Bend radius and height stay inside the 15 μm RF-center caps. It holds some designs out and reports log10 RMSE, Gaussian NLL, and one-standard-deviation coverage for Adam and for Adam followed by L-BFGS. Active rounds then screen another space-filling pool and simulate the low-phonon designs where the network is most uncertain. `--fine` and `-n` set the two sample counts. `--iterations` is the number of active rounds.
 
 `demo` is a short pipeline check. A real fit is `study`, or `collect` followed by `train` and `optimize`. `--lbfgs` is the number of L-BFGS iterations after Adam.
 

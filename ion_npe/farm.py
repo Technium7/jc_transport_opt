@@ -19,6 +19,7 @@ _SIM_KEYS = (
     "speed_m_s",
     "voltage_update_s",
     "noise_std_Vm",
+    "force",
     "with_ideal",
     "sim_dt",
     "n_geom",
@@ -132,7 +133,7 @@ def evaluate_row(kind, row, simulate_kwargs):
 
             design = DesignSpace().unpack(row)
             if not design_is_admissible(design):
-                return _failure("outside the 10 um caps or the bend folds", n_seeds)
+                return _failure("outside the 15 um caps or the bend folds", n_seeds)
             result = simulate_design(design, **_sim_kwargs(simulate_kwargs))
         elif kind == "joint":
             from .design import DesignSpace
@@ -142,7 +143,7 @@ def evaluate_row(kind, row, simulate_kwargs):
             space = DesignSpace()
             design = _unpack(space, row)
             if not _admissible(design):
-                return _failure("outside the 10 um caps or the waveform folds", n_seeds)
+                return _failure("outside the 15 um caps or the waveform folds", n_seeds)
             result = simulate_design(design, **_sim_kwargs(simulate_kwargs))
         else:
             raise ValueError("unknown farm kind {}".format(kind))

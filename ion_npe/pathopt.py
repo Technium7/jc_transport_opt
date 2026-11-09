@@ -19,7 +19,11 @@ from .train import train_predictor
 
 def _parts(space):
     names = space.names[8:]
-    return names, np.array([name.endswith("_z") for name in names])
+    z_columns = np.array([name.endswith("_z") for name in names])
+    free_columns = np.array([
+        name == "bend_r" or name.endswith("_z") for name in names
+    ])
+    return names, z_columns, free_columns
 
 
 def _design_from(space, nominal, trajectory, gates):
@@ -88,16 +92,19 @@ def optimize_trajectory(
     simulate_kwargs = simulation_settings(simulate_kwargs)
     space = DesignSpace()
     nominal = space.nominal()
-    names, z_columns = _parts(space)
+    names, z_columns, free_columns = _parts(space)
     lower = space.lower[8:]
     upper = space.upper[8:]
     span = upper - lower
     nominal_traj = nominal[8:]
+    n_gates = space.nominal_design().n_time_gates - 1
     saved = Path("outputs/schedule/schedule.npz")
     if saved.exists():
-        best_gates = np.load(saved)["best_offsets"]
+        best_gates = np.asarray(np.load(saved)["best_offsets"], dtype=float).reshape(-1)
+        if best_gates.size != n_gates:
+            best_gates = np.zeros(n_gates)
     else:
-        best_gates = np.zeros(space.nominal_design().n_time_gates - 1)
+        best_gates = np.zeros(n_gates)
     rng = np.random.default_rng(seed)
 
     probe_t, probe_g = _height_probes(nominal_traj, z_columns, best_gates)
@@ -108,7 +115,7 @@ def optimize_trajectory(
         if _ok(design, offset_limit):
             keep_t.append(np.clip(trajectory, lower, upper))
             keep_g.append(np.asarray(design.gate_offsets, dtype=float).copy())
-    unit_std = np.where(z_columns, 0.28, 0.06)
+    unit_std = np.where(free_columns, 0.28, 0.06)
     cloud_t, cloud_g = _draw(
         rng,
         max(int(n) - len(keep_t), 0),
@@ -227,11 +234,9 @@ def optimize_trajectory(
         ),
         "best bend entrance: {:.2f} um".format(design.z_bend * 50.0),
         "best crossing height: {:.2f} um".format(design.z_cross * 50.0),
-        "best arm height: {:.2f} to {:.2f} um".format(
-            design.arm_xyz[:, 2].min() * 50.0, design.arm_xyz[:, 2].max() * 50.0
-        ),
+        "best bend radius: {:.2f} um".format(design.bend_r * 50.0),
         "best bend control height: {:.2f} to {:.2f} um".format(
-            design.interior_xyz[:, 2].min() * 50.0, design.interior_xyz[:, 2].max() * 50.0
+            design.interior_z.min() * 50.0, design.interior_z.max() * 50.0
         ),
     ]
     text = "\n".join(lines) + "\n"

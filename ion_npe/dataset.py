@@ -122,8 +122,8 @@ def collect_dataset(
 
     ``design="latin"`` places one sample in each equal bin of every coordinate
     so the range is covered evenly. ``design="random"`` draws uniformly.
-    A design is skipped when the crossing is farther than 10 um, the ion
-    leaves the 50 um height by more than 10 um, the bend polygon folds, or
+    A design is skipped when the crossing is farther than 15 um, the ion
+    leaves the RF center by more than 15 um in radius or height, the bend polygon folds, or
     the RF curvature does not confine.
     """
     if design not in ("random", "latin"):
@@ -147,7 +147,7 @@ def collect_dataset(
     call_kwargs = dict(simulate_kwargs)
     call_kwargs["seeds"] = list(seeds)
     print(
-        "collecting {} designs, {} noise seeds, {} cover, fraction {:.2f}, caps 10 um".format(
+        "collecting {} designs, {} noise seeds, {} cover, fraction {:.2f}, caps 15 um".format(
             n, len(seeds), mode, fraction
         ),
         flush=True,
@@ -200,7 +200,7 @@ def collect_dataset(
         attempts += 1
         proposal_design = space.unpack(proposal)
         if not design_is_admissible(proposal_design):
-            print("  skip {:3d}: outside the 10 um caps or the bend folds".format(attempts), flush=True)
+            print("  skip {:3d}: outside the 15 um caps or the bend folds".format(attempts), flush=True)
             continue
         pending.append((attempts, proposal))
     _flush()

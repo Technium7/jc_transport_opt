@@ -1,9 +1,11 @@
 """Integrate one junction and one three-dimensional trajectory.
 
-The ion moves in the RF pseudopotential and in the field of a DC voltage set.
-The voltages are least squares for the target well, held for 100 ns, and the
-field is evaluated at the ion. The ideal comparison is still the target
-harmonic well. The stray field is off unless ``noise_std_Vm`` is set.
+The ion moves in the RF pseudopotential and in the field of the solved DC
+voltage set on the segmented electrodes. Those voltages are least squares for
+the target well, held for 100 ns, and the electrode field is evaluated at the
+ion. That electrode force is the default transport model. The ideal harmonic
+well is only an optional comparison when ``with_ideal`` is set. The stray
+field is off unless ``noise_std_Vm`` is set.
 """
 
 from dataclasses import dataclass
@@ -11,6 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .constants import (
+    FORCE_ELECTRODE_VOLTAGES,
     L_SCALE,
     NOISE_SEEDS,
     NOISE_STD_VM,
@@ -59,13 +62,21 @@ def _fail(message):
 
 
 def simulation_settings(simulate_kwargs=None):
-    """Noise amplitude and the samples drawn for one design.
+    """Noise amplitude, force model, and the samples drawn for one design.
 
-    A positive stray field needs ``NOISE_SEEDS`` samples. One sample has no
+    Transport defaults to the electrode field of the solved DC voltages. A
+    positive stray field needs ``NOISE_SEEDS`` samples. One sample has no
     variance, so the stochastic network cannot be trained on it.
     """
     kwargs = dict(simulate_kwargs or {})
+    kwargs.setdefault("force", FORCE_ELECTRODE_VOLTAGES)
     kwargs.setdefault("noise_std_Vm", NOISE_STD_VM)
+    if kwargs["force"] != FORCE_ELECTRODE_VOLTAGES:
+        raise ValueError(
+            "simulation force must be {!r} (solved DC electrode voltages); got {!r}".format(
+                FORCE_ELECTRODE_VOLTAGES, kwargs["force"]
+            )
+        )
     amplitude = float(kwargs["noise_std_Vm"])
     if amplitude < 0.0:
         raise ValueError("noise amplitude must be non-negative")
@@ -79,6 +90,16 @@ def simulation_settings(simulate_kwargs=None):
         )
     kwargs["seeds"] = seeds
     return kwargs
+
+
+def force_line(simulate_kwargs=None):
+    """One summary line for the transport force model."""
+    force = FORCE_ELECTRODE_VOLTAGES if simulate_kwargs is None else simulate_kwargs.get(
+        "force", FORCE_ELECTRODE_VOLTAGES
+    )
+    if force == FORCE_ELECTRODE_VOLTAGES:
+        return "force: solved DC electrode voltages"
+    return "force: {}".format(force)
 
 
 def stray_field_line(simulate_kwargs):
@@ -97,6 +118,7 @@ def simulate_design(
     speed_m_s=TRANSPORT_SPEED_M_S,
     voltage_update_s=VOLTAGE_UPDATE_S,
     noise_std_Vm=NOISE_STD_VM,
+    force=FORCE_ELECTRODE_VOLTAGES,
     with_ideal=False,
     sim_dt=SIM_DT,
     n_geom=120,
@@ -104,11 +126,18 @@ def simulate_design(
     """Final motional quanta for ``design``.
 
     ``seeds`` each draw an independent stray field. With ``noise_std_Vm`` 0
-    the field is omitted and one trajectory is integrated. The force is the
-    electrode field of the solved voltages. ``with_ideal`` also integrates
-    the harmonic well that follows the path at every step.
+    the field is omitted and one trajectory is integrated. The default force
+    is the electrode field of the solved DC voltages on the segmented
+    junction. ``with_ideal`` also integrates the harmonic well that follows
+    the path at every step, only as a comparison.
     """
     try:
+        if force != FORCE_ELECTRODE_VOLTAGES:
+            raise ValueError(
+                "simulation force must be {!r} (solved DC electrode voltages); got {!r}".format(
+                    FORCE_ELECTRODE_VOLTAGES, force
+                )
+            )
         sampled = dynamics_grid(design, speed_m_s, L_SCALE, sim_dt)
         junction = build_junction(design.junction)
         xyz = sampled["xyz"]

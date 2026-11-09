@@ -67,13 +67,15 @@ def _cmd_simulate(args):
     design = space.nominal_design()
     if args.z_controls is not None:
         heights = np.asarray(args.z_controls, dtype=float)
-        if heights.size != len(design.interior_xyz):
+        if heights.size != len(design.interior_z):
             raise SystemExit(
                 "--z-controls needs {} heights, one per bend control".format(
-                    len(design.interior_xyz)
+                    len(design.interior_z)
                 )
             )
-        design.interior_xyz[:, 2] = heights
+        design.interior_z = heights
+    if args.bend_r is not None:
+        design.bend_r = float(args.bend_r)
     seeds = tuple(args.seeds)
     result = simulate_design(design, seeds=seeds, with_ideal=True, **_physics(args))
     if not result.ok:
@@ -90,10 +92,11 @@ def _cmd_simulate(args):
     print("path z {:.2f} to {:.2f} um".format(
         result.z_range[0] * L_SCALE * 1e6, result.z_range[1] * L_SCALE * 1e6
     ))
-    print("bend controls (x, y in trap heights, z in um):")
-    for index, point in enumerate(design.interior_xyz):
-        print("  c{}  {:.3f}  {:.3f}  {:.2f}".format(
-            index, point[0], point[1], point[2] * L_SCALE * 1e6
+    print("bend radius {:.2f} um".format(design.bend_r * L_SCALE * 1e6))
+    print("bend controls (xy fixed, z in um):")
+    for index, (height, point) in enumerate(zip(design.interior_z, design.interior_xyz)):
+        print("  c{}  z={:.2f}  xy=({:.3f}, {:.3f})".format(
+            index, height * L_SCALE * 1e6, point[0], point[1],
         ))
     print("transverse frequency {:.3f} to {:.3f} MHz".format(*result.f_trans_MHz))
     for index, seed in enumerate(seeds):
@@ -277,6 +280,10 @@ def main(argv=None):
         "--z-controls", type=float, nargs="+", default=None,
         help="height of each bend control, in trap heights; default is 50 um",
     )
+    sim.add_argument(
+        "--bend-r", type=float, default=None,
+        help="shared bend radius from the RF null, in trap heights; default is 0",
+    )
     sim.add_argument("--out", type=str, default="", help="optional path figure")
     sim.set_defaults(func=_cmd_simulate)
 
@@ -353,7 +360,7 @@ def main(argv=None):
 
     traj = sub.add_parser(
         "trajectory",
-        help="search arm, bend, and crossing xyz, with the ion starting and ending at 50 um",
+        help="search bend radius, height, and (a, b), with the ion starting and ending at 50 um",
     )
     _add_physics(traj)
     traj.add_argument("-o", "--out", type=str, default="outputs/trajectory")

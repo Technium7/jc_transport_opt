@@ -105,7 +105,7 @@ def run_study(
     space = DesignSpace()
     nominal = space.nominal_design()
     if not design_is_admissible(nominal):
-        raise RuntimeError("nominal design is outside the 10 um caps")
+        raise RuntimeError("nominal design is outside the 15 um caps")
 
     print("simulating the nominal design with the stray field off", flush=True)
     baseline = simulate_design(nominal, seeds=seeds, with_ideal=False, noise_std_Vm=0.0)
@@ -251,7 +251,7 @@ def run_study(
     best = int(np.argmin(full.total_mean()))
     best_design = space.unpack(full.x[best])
     if not design_is_admissible(best_design):
-        raise RuntimeError("best design left the 10 um caps")
+        raise RuntimeError("best design left the 15 um caps")
     plot_trajectory(best_design, path_geometry(best_design), out / "best_path.png")
 
     nominal_heating = float(total_heating(baseline.quanta))
@@ -261,7 +261,7 @@ def run_study(
         "fine neighborhood: {} designs, fraction {:.2f}, including the nominal path".format(
             len(fine) + 1, fine_fraction
         ),
-        "wide range: {} Latin-hypercube designs, fraction {:.2f}, height and crossing at the 10 um cap".format(
+        "wide range: {} Latin-hypercube designs, fraction {:.2f}, radius and height at the 15 um RF-center cap".format(
             len(wide), fraction
         ),
         "training designs before the search: {}".format(len(train_idx)),
@@ -298,6 +298,7 @@ def run_study(
     lines.append("lowest five designs, heating and unit distance from nominal:")
     for item in gap["closest_low"]:
         lines.append("  heating {:.6g}  unit distance {:.3f}".format(item[0], item[1]))
+    lines.append("best bend radius: {:.2f} um".format(best_design.bend_r * L_SCALE * 1e6))
     lines.append("best crossing distance: {:.2f} um".format(best_design.cross_s * L_SCALE * 1e6))
     lines.append("best crossing height: {:.2f} um".format(best_design.z_cross * L_SCALE * 1e6))
     lines.append("best arm height: {:.2f} to {:.2f} um".format(
@@ -354,4 +355,4 @@ def _check_caps(dataset):
     for vector in dataset.x:
         design = dataset.space.unpack(vector)
         if not design_is_admissible(design):
-            raise RuntimeError("a collected design is outside the 10 um caps")
+            raise RuntimeError("a collected design is outside the 15 um caps")
