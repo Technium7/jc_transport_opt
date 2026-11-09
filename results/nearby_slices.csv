@@ -1,0 +1,11 @@
+run,slice,best_total
+field_off,waveform,0.00548383
+field_off,junction,0.0196088
+field_off,trajectory,0.0359932
+field_off,joint,0.292011
+field_off,active,0.0416902
+field_on,waveform,270.668
+field_on,junction,244.418
+field_on,trajectory,10955100000000.0
+field_on,joint,9869080000000.0
+field_on,active,4175870000000.0

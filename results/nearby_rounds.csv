@@ -1,0 +1,12 @@
+run,round,designs,best_total,source
+field_off,nominal,1,6.801,
+field_off,0,2001,0.3568,waveform
+field_off,1,3001,0.04759,waveform
+field_off,2,4001,0.01981,junction
+field_off,3,5001,0.005484,waveform
+field_on,nominal,1,24589300000000.0,
+field_on,0,2001,625.7,junction
+field_on,1,3001,278.8,waveform
+field_on,2,4001,269.2,junction
+field_on,3,5001,244.4,junction
+field_on,4,6001,244.4,

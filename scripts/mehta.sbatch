@@ -30,7 +30,8 @@ export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export MPLBACKEND=Agg
 export ION_NPE_FARM="${PWD}/outputs/farm/${SLURM_JOB_ID}"
-mkdir -p "${ION_NPE_FARM}"
+export ION_FARM_DIR="${PWD}/outputs/farm/${SLURM_JOB_ID}"
+mkdir -p "${ION_NPE_FARM}" "${ION_FARM_DIR}"
 
 echo "host $(hostname)  tasks 12  start $(date)"
 echo "command: ion_npe $*"

@@ -1,0 +1,26 @@
+local search starting at the nominal path
+stray field: 100 V/m, 20 samples per design
+start and end height: 50 um
+designs simulated: 6001
+waveform samples: 1248
+junction samples: 1248
+trajectory samples: 1248
+joint samples: 1256
+active-region samples: 1000
+nominal total quanta: 2.45893e+13
+best waveform-only total quanta: 270.668
+best junction-only total quanta: 244.418
+best trajectory-only total quanta: 1.09551e+13
+best joint total quanta: 9.86908e+12
+best active-region total quanta: 4.17587e+12
+best total quanta: 244.418
+best mean quanta: 182.904 36.2807 25.2338
+best total std across samples: 359.835
+best origin: r3-junction
+junction shift from nominal, unit norm: 0.394
+trajectory shift from nominal, unit norm: 0
+waveform shift from nominal, gate norm: 0.007264
+best crossing distance: 5.00 um
+best crossing height: 50.00 um
+best bend entrance: 50.00 um
+best arm height: 50.00 to 50.00 um

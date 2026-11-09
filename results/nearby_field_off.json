@@ -1,0 +1,60 @@
+{
+  "label": "field_off",
+  "job": 30340,
+  "out": "outputs/electrodes_harmonic",
+  "force": "harmonic_well",
+  "noise_std_Vm": 0.0,
+  "n_seeds": 1,
+  "designs": 5001,
+  "nominal_total": 6.80101,
+  "best_total": 0.00548383,
+  "best_origin": "r3-waveform",
+  "best_mode_quanta": [
+    0.000957057,
+    0.00452677,
+    9.39197e-22
+  ],
+  "best_total_std": null,
+  "junction_shift": 0.08361,
+  "trajectory_shift": 0.0,
+  "waveform_shift": 0.1386,
+  "rounds": [
+    {
+      "round": "nominal",
+      "designs": 1,
+      "best_total": 6.801,
+      "source": null
+    },
+    {
+      "round": 0,
+      "designs": 2001,
+      "best_total": 0.3568,
+      "source": "waveform"
+    },
+    {
+      "round": 1,
+      "designs": 3001,
+      "best_total": 0.04759,
+      "source": "waveform"
+    },
+    {
+      "round": 2,
+      "designs": 4001,
+      "best_total": 0.01981,
+      "source": "junction"
+    },
+    {
+      "round": 3,
+      "designs": 5001,
+      "best_total": 0.005484,
+      "source": "waveform"
+    }
+  ],
+  "slice_best": {
+    "waveform": 0.00548383,
+    "junction": 0.0196088,
+    "trajectory": 0.0359932,
+    "joint": 0.292011,
+    "active": 0.0416902
+  }
+}

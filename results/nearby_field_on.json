@@ -1,0 +1,66 @@
+{
+  "label": "field_on",
+  "job": 133160,
+  "out": "outputs/nearby_field",
+  "force": "electrode_voltages",
+  "noise_std_Vm": 100.0,
+  "n_seeds": 20,
+  "designs": 6001,
+  "nominal_total": 24589300000000.0,
+  "best_total": 244.418,
+  "best_origin": "r3-junction",
+  "best_mode_quanta": [
+    182.904,
+    36.2807,
+    25.2338
+  ],
+  "best_total_std": 359.835,
+  "junction_shift": 0.394,
+  "trajectory_shift": 0.0,
+  "waveform_shift": 0.007264,
+  "rounds": [
+    {
+      "round": "nominal",
+      "designs": 1,
+      "best_total": 24589300000000.0,
+      "source": null
+    },
+    {
+      "round": 0,
+      "designs": 2001,
+      "best_total": 625.7,
+      "source": "junction"
+    },
+    {
+      "round": 1,
+      "designs": 3001,
+      "best_total": 278.8,
+      "source": "waveform"
+    },
+    {
+      "round": 2,
+      "designs": 4001,
+      "best_total": 269.2,
+      "source": "junction"
+    },
+    {
+      "round": 3,
+      "designs": 5001,
+      "best_total": 244.4,
+      "source": "junction"
+    },
+    {
+      "round": 4,
+      "designs": 6001,
+      "best_total": 244.4,
+      "source": null
+    }
+  ],
+  "slice_best": {
+    "waveform": 270.668,
+    "junction": 244.418,
+    "trajectory": 10955100000000.0,
+    "joint": 9869080000000.0,
+    "active": 4175870000000.0
+  }
+}
