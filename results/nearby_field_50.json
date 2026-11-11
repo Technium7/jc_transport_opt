@@ -1,0 +1,100 @@
+{
+  "label": "field_50",
+  "job": 204542,
+  "out": "outputs/nearby_field_50",
+  "force": "electrode_voltages",
+  "noise_std_Vm": 50.0,
+  "n_seeds": 20,
+  "designs": 6001,
+  "nominal_total": 193.21285066064704,
+  "best_total": 1.9340040343841363,
+  "best_origin": "r4-waveform",
+  "best_mode_quanta": [
+    1.5406643250976404,
+    0.2285098670761449,
+    0.16482984221035094
+  ],
+  "best_total_std": 3.363790984858821,
+  "rounds": [
+    {
+      "round": "nominal",
+      "designs": 1,
+      "best_total": 193.213,
+      "source": null
+    },
+    {
+      "round": 0,
+      "designs": 2001,
+      "best_total": 55.97,
+      "source": "junction"
+    },
+    {
+      "round": 1,
+      "designs": 3001,
+      "best_total": 27.49,
+      "source": "waveform"
+    },
+    {
+      "round": 2,
+      "designs": 4001,
+      "best_total": 14.44,
+      "source": "waveform"
+    },
+    {
+      "round": 3,
+      "designs": 5001,
+      "best_total": 6.427,
+      "source": "junction"
+    },
+    {
+      "round": 4,
+      "designs": 6001,
+      "best_total": 1.934,
+      "source": "waveform"
+    }
+  ],
+  "slice_best": {
+    "waveform": 1.9340040343841363,
+    "junction": 4.361297378860461,
+    "trajectory": 6253.532090266259,
+    "joint": 1247.1158719390835,
+    "active": 394.7936465026238
+  },
+  "training_log10_rmse": [
+    {
+      "before_round": 1,
+      "designs": 2001,
+      "log10_rmse": 1.38,
+      "adam_val": 1.413,
+      "lbfgs": 1.189
+    },
+    {
+      "before_round": 2,
+      "designs": 3001,
+      "log10_rmse": 1.286,
+      "adam_val": 1.308,
+      "lbfgs": 1.211
+    },
+    {
+      "before_round": 3,
+      "designs": 4001,
+      "log10_rmse": 1.185,
+      "adam_val": 1.328,
+      "lbfgs": 1.281
+    },
+    {
+      "before_round": 4,
+      "designs": 5001,
+      "log10_rmse": 1.128,
+      "adam_val": 1.374,
+      "lbfgs": 1.256
+    },
+    {
+      "before_round": "final",
+      "designs": 6001,
+      "log10_rmse": 1.255,
+      "adam_val": 1.416,
+      "lbfgs": 1.334
+    }
+  ]
+}

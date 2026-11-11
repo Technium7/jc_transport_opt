@@ -27,15 +27,22 @@ class LocalNeighborhoodTests(unittest.TestCase):
         self.assertEqual(counts["trajectory"], 500)
         self.assertEqual(counts["joint"], 500)
 
-    def test_height_window_can_leave_50_um_and_gates_cover_a_waveform_shift(self):
+    def test_trajectory_is_bend_and_time_profile_and_gates_can_shift(self):
         space = DesignSpace()
         lower, upper = _bounds(space)
+        center = np.concatenate([space.nominal(), np.zeros(N_GATES)])
+        group = blocks(len(center))
+        self.assertEqual(
+            [space.names[i] for i in group["trajectory"]],
+            ["cross_s", "curve_a", "curve_b"],
+        )
+        self.assertFalse(any(name.endswith("_z") for name in space.names))
         half = neighborhood_half(space, lower, upper)
         self.assertGreater(half[-1], 0.07)
-        z = [i for i, name in enumerate(space.names) if name.endswith("_z")]
-        self.assertTrue(np.all(half[z] > 0.1))
-        lo, hi = box_around(np.concatenate([space.nominal(), np.zeros(N_GATES)]), half, lower, upper)
+        lo, hi = box_around(center, half, lower, upper)
         self.assertTrue(np.all(hi > lo))
+        design = space.unpack(center[:-N_GATES])
+        self.assertTrue(np.allclose(design.interior_z, 1.0))
 
 
 if __name__ == "__main__":

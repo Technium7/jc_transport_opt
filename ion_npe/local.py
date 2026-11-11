@@ -42,8 +42,8 @@ def blocks(dim):
 def neighborhood_half(space, lower, upper):
     """Half-width of the box around the nominal path.
 
-    Gates cover the shifts that change the time law. Heights can leave 50 um.
-    The other controls stay in a fraction of their allowed range.
+    Gates cover the shifts that change the time law. Bend radius and ``(a, b)``
+    stay in a fraction of their allowed range. Height is not a search coordinate.
     """
     span = upper - lower
     names = list(space.names) + ["g{}".format(i) for i in range(N_GATES)]

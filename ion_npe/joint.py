@@ -1,8 +1,9 @@
 """One search over the junction, the trajectory, and the waveform.
 
-The space-filling sample trains the network. Cross-entropy rounds and active
-rounds then simulate additional designs chosen from that model. Every proposed
-design still moves the junction, the path, and the time gates.
+The space-filling sample trains the network. Cross-entropy rounds then
+simulate the designs that network ranks as coldest. Height stays at 50 um.
+The free trajectory coordinates are the bend radius and ``(a, b)``. The
+waveform is the symmetric time-gate offsets.
 """
 
 from pathlib import Path

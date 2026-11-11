@@ -10,3 +10,9 @@ field_on,1,3001,278.8,waveform
 field_on,2,4001,269.2,junction
 field_on,3,5001,244.4,junction
 field_on,4,6001,244.4,
+field_50,nominal,1,193.213,
+field_50,0,2001,55.97,junction
+field_50,1,3001,27.49,waveform
+field_50,2,4001,14.44,waveform
+field_50,3,5001,6.427,junction
+field_50,4,6001,1.934,waveform

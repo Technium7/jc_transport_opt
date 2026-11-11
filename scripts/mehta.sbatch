@@ -1,6 +1,7 @@
 #!/bin/bash
 # Parallel ion_npe command on the mehta node.
-# 12 tasks, 48 GB, 8 hours. Rank 0 runs the command and trains.
+# The mehta partition is one machine, mehta-cpu-01, with 16 cores.
+# This allocation takes all of them. Rank 0 runs the command and trains.
 # Every task simulates its own share of each collection batch.
 #
 #   sbatch scripts/mehta.sbatch nearby -o outputs/electrodes --noise 0 --seeds 0 \
@@ -8,9 +9,10 @@
 #SBATCH --job-name=ion-npe
 #SBATCH --account=mehta
 #SBATCH --partition=mehta
-#SBATCH --mem=48G
+#SBATCH --mem=96G
 #SBATCH --time=8:00:00
-#SBATCH -n 12
+#SBATCH -n 16
+#SBATCH --ntasks-per-node=16
 #SBATCH --output=/share/mehta/zx296/slurm_jobs/ion-npe-%j.out
 #SBATCH --error=/share/mehta/zx296/slurm_jobs/ion-npe-%j.err
 
@@ -33,11 +35,13 @@ export ION_NPE_FARM="${PWD}/outputs/farm/${SLURM_JOB_ID}"
 export ION_FARM_DIR="${PWD}/outputs/farm/${SLURM_JOB_ID}"
 mkdir -p "${ION_NPE_FARM}" "${ION_FARM_DIR}"
 
-echo "host $(hostname)  tasks 12  start $(date)"
+echo "host $(hostname)  nodes ${SLURM_NNODES}  tasks ${SLURM_NTASKS}  start $(date)"
 echo "command: ion_npe $*"
 
-# The batch shell only waits. --overlap lets the 12 tasks use this allocation.
-srun --overlap --ntasks=12 --cpus-per-task=1 --cpu-bind=cores \
+# The batch shell only waits. --overlap lets every allocated task use this step.
+srun --overlap --ntasks="${SLURM_NTASKS}" \
+  --ntasks-per-node="${SLURM_NTASKS_PER_NODE:-${SLURM_NTASKS}}" \
+  --cpus-per-task=1 --cpu-bind=cores \
   "${PWD}/.venv/bin/python" -u -m ion_npe "$@"
 
 echo "finished $(date)"

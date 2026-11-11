@@ -1,9 +1,7 @@
-"""Trajectory search with a free height along the path and at the crossing.
+"""Trajectory search over the bend radius and the ``(a, b)`` time profile.
 
-The junction stays at the developed design. The arm, the bend, the bend
-entrance, and the crossing move in the design vector. The ion still starts
-and ends at 50 um. Time-gate offsets move with the path, so a height change
-can be compared with the waveform that already lowered the phonon number.
+The junction stays at the developed design. Height stays at 50 um. Time-gate
+offsets move with the path.
 """
 
 from pathlib import Path
@@ -19,11 +17,10 @@ from .train import train_predictor
 
 def _parts(space):
     names = space.names[8:]
-    z_columns = np.array([name.endswith("_z") for name in names])
     free_columns = np.array([
-        name == "cross_s" or name.endswith("_z") for name in names
+        name in ("cross_s", "curve_a", "curve_b") for name in names
     ])
-    return names, z_columns, free_columns
+    return names, free_columns
 
 
 def _design_from(space, nominal, trajectory, gates):
@@ -59,17 +56,12 @@ def _draw(rng, n, mean, std, lower, upper, space, nominal, limit):
     return np.vstack(drawn_t), np.vstack(drawn_g)
 
 
-def _height_probes(nominal_traj, z_columns, gates):
+def _reference_rows(nominal_traj, gates):
     rows_t = [nominal_traj.copy()]
     rows_g = [np.zeros_like(gates)]
     if np.any(gates):
         rows_t.append(nominal_traj.copy())
         rows_g.append(np.asarray(gates, dtype=float).copy())
-    for height in (0.90, 0.86, 1.08):
-        moved = nominal_traj.copy()
-        moved[z_columns] = height
-        rows_t.append(moved)
-        rows_g.append(np.zeros_like(gates))
     return rows_t, rows_g
 
 
@@ -85,14 +77,14 @@ def optimize_trajectory(
     offset_limit=0.10,
     simulate_kwargs=None,
 ):
-    """Search paths whose height can follow the Laplacian, not only z = 50 um."""
+    """Search the bend radius and ``(a, b)``. Height stays at 50 um."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     simulate_kwargs = dict(simulate_kwargs or {})
     simulate_kwargs = simulation_settings(simulate_kwargs)
     space = DesignSpace()
     nominal = space.nominal()
-    names, z_columns, free_columns = _parts(space)
+    names, free_columns = _parts(space)
     lower = space.lower[8:]
     upper = space.upper[8:]
     span = upper - lower
@@ -107,7 +99,7 @@ def optimize_trajectory(
         best_gates = np.zeros(n_gates)
     rng = np.random.default_rng(seed)
 
-    probe_t, probe_g = _height_probes(nominal_traj, z_columns, best_gates)
+    probe_t, probe_g = _reference_rows(nominal_traj, best_gates)
     keep_t = []
     keep_g = []
     for trajectory, gates in zip(probe_t, probe_g):

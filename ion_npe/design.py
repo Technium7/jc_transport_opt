@@ -1,11 +1,10 @@
 """Junction and trajectory design vector.
 
 The search coordinates are the eight symmetric Y-junction controls, the bend
-radius ``cross_s``, the heights of the bend controls, and the ``(a, b)``
-time profile. ``cross_s`` fixes the bend ``(x, y)``. Those coordinates are
-not separate search parameters. ``cross_s`` stays within 15 um of the RF
-center, and each height stays within 15 um of 50 um. The arm stays on the
-developed path.
+radius ``cross_s``, and the ``(a, b)`` time profile. ``cross_s`` fixes the
+bend ``(x, y)``. Those coordinates are not separate search parameters.
+``cross_s`` stays within 15 um of the RF center. Every control height stays
+at the nominal 50 um. The arm stays on the developed path.
 """
 
 from dataclasses import dataclass, field
@@ -40,9 +39,6 @@ _DEVELOPED_STATIONS = np.array([
     [-0.1459, 0.0429],
 ], dtype=float)
 N_INTERIOR = len(_DEVELOPED_STATIONS)
-_Z_SPAN = HEIGHT_CAP_M / L_SCALE
-_Z_LO = ION_HEIGHT - _Z_SPAN
-_Z_HI = ION_HEIGHT + _Z_SPAN
 _CROSS_S = 0.1
 _CROSS_HI = CROSS_CAP_M / L_SCALE
 _MIRROR_ANGLE = 2.0 * np.pi / 3.0
@@ -165,13 +161,9 @@ def _feature_table():
         ("ci_l", 0.60, 1.80),
         ("co_l", 3.50, 6.50),
         ("cross_s", 0.0, _CROSS_HI),
-    ]
-    for index in range(N_INTERIOR):
-        rows.append(("c{}_z".format(index), _Z_LO, _Z_HI))
-    rows.extend([
         ("curve_a", 1.20, 5.50),
         ("curve_b", 0.60, 2.80),
-    ])
+    ]
     return tuple(rows)
 
 
@@ -185,8 +177,8 @@ class TransportDesign:
 
     ``cross_s`` is the bend radius. It fixes the control ``(x, y)``. Those
     coordinates are not separate search parameters. ``interior_z`` is the
-    height of each control. ``arm_xyz`` is fixed.
-    The start and end stay at 50 um.
+    height of each control and stays at 50 um for every sampled design.
+    ``arm_xyz`` is fixed. The start and end stay at 50 um.
     """
 
     junction: np.ndarray
@@ -321,7 +313,7 @@ class DesignSpace:
         return len(self.names)
 
     def nominal_design(self):
-        """Developed junction. Radius ``cross_s`` is 0.1; height stays at 50 um."""
+        """Developed junction. Radius ``cross_s`` is 0.1 and every height is 50 um."""
         return TransportDesign(
             junction=DEFAULT_JUNCTION.copy(),
             interior_z=np.full(N_INTERIOR, ION_HEIGHT),
@@ -343,9 +335,7 @@ class DesignSpace:
     def pack(self, design):
         values = np.concatenate([
             np.asarray(design.junction, dtype=float).reshape(8),
-            [float(design.cross_s)],
-            np.asarray(design.interior_z, dtype=float).reshape(N_INTERIOR),
-            [design.curves[0], design.curves[1]],
+            [float(design.cross_s), design.curves[0], design.curves[1]],
         ])
         if values.size != self.dim:
             raise ValueError("packed design has the wrong length")
@@ -357,11 +347,10 @@ class DesignSpace:
             raise ValueError(
                 "design vector has length {}, expected {}".format(x.size, self.dim)
             )
-        z0 = 9
         return TransportDesign(
             junction=x[:8],
-            interior_z=x[z0:z0 + N_INTERIOR],
-            curves=(x[-2], x[-1]),
+            interior_z=np.full(N_INTERIOR, ION_HEIGHT),
+            curves=(float(x[9]), float(x[10])),
             arm_xyz=np.array(_ARM, dtype=float),
             cross_s=x[8],
             x_start=self.x_start,
@@ -400,8 +389,9 @@ class DesignSpace:
     def sample_latin(self, rng, n, fraction=1.0, cap_fraction=None):
         """Space-filling samples. Each coordinate is split into ``n`` equal bins.
 
-        One design falls in each bin, so the radius, the heights, the
-        junction, and ``(a, b)`` cover their ranges evenly instead of clumping.
+        One design falls in each bin, so the radius, the junction, and
+        ``(a, b)`` cover their ranges evenly instead of clumping. Height
+        stays at 50 um.
         """
         from scipy.stats.qmc import LatinHypercube
 
