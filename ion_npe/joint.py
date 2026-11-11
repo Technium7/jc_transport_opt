@@ -3,7 +3,8 @@
 The space-filling sample trains the network. Cross-entropy rounds then
 simulate the designs that network ranks as coldest. Height stays at 50 um.
 The free trajectory coordinates are the bend radius and ``(a, b)``. The
-waveform is the symmetric time-gate offsets.
+waveform coordinates are the three outbound gates. The center gate stays at
+0, and the return half is their mirror.
 """
 
 from pathlib import Path
@@ -12,27 +13,32 @@ import numpy as np
 
 from .constants import L_SCALE
 from .dataset import design_is_admissible
-from .design import DesignSpace, symmetric_gate_offsets
+from .design import (
+    DesignSpace,
+    N_FREE_GATES,
+    expand_free_gates,
+    free_gate_offsets,
+)
 from .schedule import schedule_is_admissible
 from .simulate import force_line, simulate_design, simulation_settings, stray_field_line, total_heating
 from .active import active_ranking
 from .train import finetune, train_predictor
 
-# Seven interior gates. Four lie on the first half, the last of them at
-# mid-path. Symmetry fixes that center gate and mirrors the other three.
+# The spline still has seven interior gates. The search stores the three
+# outbound gates. The center gate is fixed, and the return half mirrors them.
 N_GATES = 7
 GATE_LIMIT = 0.10
 
 
 def _bounds(space):
-    lower = np.concatenate([space.lower, np.full(N_GATES, -GATE_LIMIT)])
-    upper = np.concatenate([space.upper, np.full(N_GATES, GATE_LIMIT)])
+    lower = np.concatenate([space.lower, np.full(N_FREE_GATES, -GATE_LIMIT)])
+    upper = np.concatenate([space.upper, np.full(N_FREE_GATES, GATE_LIMIT)])
     return lower, upper
 
 
 def _std(space, lower, upper, gate_std):
     span = upper - lower
-    names = list(space.names) + ["g{}".format(i) for i in range(N_GATES)]
+    names = list(space.names) + ["g{}".format(i) for i in range(N_FREE_GATES)]
     std = np.empty(len(names))
     for index, name in enumerate(names):
         if name.startswith("g"):
@@ -47,16 +53,30 @@ def _std(space, lower, upper, gate_std):
 
 
 def project_joint_row(row):
-    """Copy a joint vector and replace its gates with a symmetric waveform."""
-    prepared = np.asarray(row, dtype=float).copy()
-    prepared[-N_GATES:] = symmetric_gate_offsets(prepared[-N_GATES:])
-    return prepared
+    """Joint search vector: the design, then the three outbound gates.
+
+    A saved row that still carries all seven spline gates is reduced. The
+    center gate is dropped and the return half is not stored again.
+    """
+    values = np.asarray(row, dtype=float).reshape(-1)
+    dim = DesignSpace().dim
+    if values.size == dim + N_GATES:
+        gates = free_gate_offsets(values[dim:])
+    elif values.size == dim + N_FREE_GATES:
+        gates = free_gate_offsets(values[dim:])
+    else:
+        raise ValueError(
+            "joint vector must have length {} or {}, got {}".format(
+                dim + N_FREE_GATES, dim + N_GATES, values.size
+            )
+        )
+    return np.concatenate([values[:dim], gates])
 
 
 def _unpack(space, row):
     prepared = project_joint_row(row)
-    design = space.unpack(prepared[:-N_GATES])
-    design.gate_offsets = prepared[-N_GATES:]
+    design = space.unpack(prepared[:-N_FREE_GATES])
+    design.gate_offsets = expand_free_gates(prepared[-N_FREE_GATES:])
     return design
 
 
@@ -71,11 +91,11 @@ def _admissible(design):
 def _saved_gates():
     path = Path("outputs/schedule/schedule.npz")
     if not path.exists():
-        return np.zeros(N_GATES)
+        return np.zeros(N_FREE_GATES)
     gates = np.asarray(np.load(path)["best_offsets"], dtype=float).reshape(-1)
-    if gates.size != N_GATES:
-        return np.zeros(N_GATES)
-    return gates
+    if gates.size not in (N_FREE_GATES, N_GATES):
+        return np.zeros(N_FREE_GATES)
+    return free_gate_offsets(gates)
 
 
 def _simulate_row(space, row, simulate_kwargs):
@@ -330,11 +350,11 @@ def _append(rows, quanta, totals, origin, kept, new_q, new_total, tag):
 
 
 def _shifts(row, nominal, space):
-    unit = space.to_unit(row[:-N_GATES])
-    base = space.to_unit(nominal[:-N_GATES])
+    unit = space.to_unit(row[:-N_FREE_GATES])
+    base = space.to_unit(nominal[:-N_FREE_GATES])
     junction = float(np.linalg.norm(unit[:8] - base[:8]))
     path = float(np.linalg.norm(unit[8:] - base[8:]))
-    gates = float(np.linalg.norm(row[-N_GATES:] - nominal[-N_GATES:]))
+    gates = float(np.linalg.norm(row[-N_FREE_GATES:] - nominal[-N_FREE_GATES:]))
     return junction, path, gates
 
 
@@ -374,7 +394,7 @@ def optimize_joint(
     simulate_kwargs = simulation_settings(simulate_kwargs)
     space = DesignSpace()
     lower, upper = _bounds(space)
-    nominal = np.concatenate([space.nominal(), np.zeros(N_GATES)])
+    nominal = np.concatenate([space.nominal(), np.zeros(N_FREE_GATES)])
     cache = out / "joint.npz"
     rng = np.random.default_rng(seed)
     local_std = _std(space, lower, upper, 0.03)
@@ -397,7 +417,7 @@ def optimize_joint(
         )
     else:
         waveform = nominal.copy()
-        waveform[-N_GATES:] = _saved_gates()
+        waveform[-N_FREE_GATES:] = _saved_gates()
         print("nominal junction, trajectory, and waveform", flush=True)
         nominal_result = _simulate_row(space, nominal, simulate_kwargs)
         if nominal_result is None:
@@ -406,7 +426,7 @@ def optimize_joint(
         quanta_parts = [nominal_result.quanta.reshape(1, *nominal_result.quanta.shape)]
         total_parts = [float(total_heating(nominal_result.quanta))]
         print("  heating {:.4g}".format(total_parts[-1]), flush=True)
-        if np.any(waveform[-N_GATES:]):
+        if np.any(waveform[-N_FREE_GATES:]):
             print("same junction and path, reshaped waveform", flush=True)
             wave_result = _simulate_row(space, waveform, simulate_kwargs)
             if wave_result is not None:
@@ -465,7 +485,7 @@ def optimize_joint(
         _save_cache(cache, rows, quanta, totals, n_train, origin)
         finetune(
             predictor, rows, quanta, epochs=max(epochs // 2, 10), seed=seed + iteration + 1,
-            log_every=0, lbfgs_maxiter=0, batch_size=64,
+            log_every=0, lbfgs_maxiter=lbfgs_maxiter, batch_size=64,
         )
 
     for step in range(int(active_rounds)):
@@ -488,12 +508,12 @@ def optimize_joint(
         if kept:
             finetune(
                 predictor, rows, quanta, epochs=max(epochs // 2, 10), seed=seed + 100 + step,
-                log_every=0, lbfgs_maxiter=0, batch_size=64,
+                log_every=0, lbfgs_maxiter=lbfgs_maxiter, batch_size=64,
             )
     predictor.save(out / "stochastic.npz")
 
     train_rows = np.flatnonzero(origin == "train")
-    n_ref = 2 if len(train_rows) > 1 and np.any(rows[train_rows[1], -N_GATES:]) else 1
+    n_ref = 2 if len(train_rows) > 1 and np.any(rows[train_rows[1], -N_FREE_GATES:]) else 1
     latin = train_rows[n_ref:]
     cem = np.flatnonzero((origin == "cem-elite") | (origin == "cem-best"))
     active = np.flatnonzero(origin == "active")
@@ -509,8 +529,10 @@ def optimize_joint(
         reference=space.nominal_design(), total_quanta=float(totals[plot_i]),
     )
     _save_cache(cache, rows, quanta, totals, n_train, origin)
-    unit = space.to_unit(rows[latin, :-N_GATES])
-    gate_unit = (rows[latin, -N_GATES:] - lower[-N_GATES:]) / (upper[-N_GATES:] - lower[-N_GATES:])
+    unit = space.to_unit(rows[latin, :-N_FREE_GATES])
+    gate_unit = (rows[latin, -N_FREE_GATES:] - lower[-N_FREE_GATES:]) / (
+        upper[-N_FREE_GATES:] - lower[-N_FREE_GATES:]
+    )
 
     def _best(indices):
         if len(indices) == 0:

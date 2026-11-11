@@ -16,7 +16,8 @@ from .active import active_ranking
 from .constants import L_SCALE
 from .design import DesignSpace
 from .joint import (
-    N_GATES, _admissible, _bounds, _location, _shifts, _simulate_row, _unpack, project_joint_row,
+    N_FREE_GATES, _admissible, _bounds, _location, _shifts, _simulate_row, _unpack,
+    project_joint_row,
 )
 from .simulate import force_line, simulation_settings, stray_field_line, total_heating
 from .train import log_rmse, train_predictor
@@ -26,11 +27,11 @@ MIN_TRAIN = 1000
 
 def blocks(dim):
     """Index groups of a joint vector: junction, trajectory, waveform."""
-    if dim <= N_GATES + 8:
+    if dim <= N_FREE_GATES + 8:
         raise ValueError("joint vector is too short")
     junction = np.arange(0, 8)
-    waveform = np.arange(dim - N_GATES, dim)
-    trajectory = np.arange(8, dim - N_GATES)
+    waveform = np.arange(dim - N_FREE_GATES, dim)
+    trajectory = np.arange(8, dim - N_FREE_GATES)
     return {
         "junction": junction,
         "trajectory": trajectory,
@@ -46,7 +47,7 @@ def neighborhood_half(space, lower, upper):
     stay in a fraction of their allowed range. Height is not a search coordinate.
     """
     span = upper - lower
-    names = list(space.names) + ["g{}".format(i) for i in range(N_GATES)]
+    names = list(space.names) + ["g{}".format(i) for i in range(N_FREE_GATES)]
     half = np.empty(len(names))
     for index, name in enumerate(names):
         if name.startswith("g"):
@@ -264,7 +265,7 @@ def _next_half(rows, totals, initial_half):
     best = rows[int(order[0])]
     spread = np.maximum(1.5 * elite.std(axis=0), 0.40 * initial_half)
     half = np.minimum(spread, initial_half)
-    half[-N_GATES:] = np.clip(half[-N_GATES:], 0.04, initial_half[-N_GATES:])
+    half[-N_FREE_GATES:] = np.clip(half[-N_FREE_GATES:], 0.04, initial_half[-N_FREE_GATES:])
     return best, half
 
 
@@ -328,7 +329,7 @@ def optimize_local(
     seeds = simulate_kwargs["seeds"]
     space = DesignSpace()
     lower, upper = _bounds(space)
-    nominal = np.concatenate([space.nominal(), np.zeros(N_GATES)])
+    nominal = np.concatenate([space.nominal(), np.zeros(N_FREE_GATES)])
     initial_half = neighborhood_half(space, lower, upper)
     rng = np.random.default_rng(seed)
     cache = out / "local.npz"

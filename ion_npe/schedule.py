@@ -4,16 +4,16 @@ That search cut the phonon number by about 10x by moving the intermediate
 gates of an otherwise fixed transport and keeping the cross-entropy cloud on
 the designs that had just been simulated. The junction and the spatial bend
 stay at the nominal design. Only the interior samples of the time law move.
-With a symmetric waveform, four gates lie on the first half and the last of
-them is at mid-path. The center gate stays fixed, and the return gates mirror
-the first three.
+The search stores the three outbound gates. The center gate stays fixed, and
+the return half is their mirror. The spline is expanded to seven gates only
+when a waveform is checked or simulated.
 """
 
 from pathlib import Path
 
 import numpy as np
 
-from .design import DesignSpace, symmetric_gate_offsets
+from .design import DesignSpace, N_FREE_GATES, expand_free_gates
 from .simulate import force_line, simulate_design, simulation_settings, stray_field_line, total_heating
 from .train import train_predictor
 from .trajectory import one_sided_time_gates, s_of_tau, time_gate_samples
@@ -46,31 +46,30 @@ def _draw_offsets(rng, n, mean, std, curves, n_gates, limit):
     cap = max(int(n) * 80, 80)
     while len(drawn) < int(n) and tries < cap:
         tries += 1
-        offsets = np.clip(rng.normal(mean, std), -limit, limit)
-        offsets = symmetric_gate_offsets(offsets)
-        if schedule_is_admissible(offsets, curves, n_gates, limit=limit):
-            drawn.append(offsets)
+        free = np.clip(rng.normal(mean, std), -limit, limit)
+        full = expand_free_gates(free)
+        if schedule_is_admissible(full, curves, n_gates, limit=limit):
+            drawn.append(free)
     if len(drawn) < int(n):
         raise RuntimeError("could not draw enough monotone transport waveforms")
     return np.vstack(drawn)
 
 
 def _probe_offsets(step, n_gates):
-    """Paired gate moves, so every probe waveform is symmetric about mid-path."""
-    n_interior = int(n_gates) - 1
-    rows = [np.zeros(n_interior)]
-    for index in range(n_interior // 2):
+    """Moves of the three outbound gates. The return half is filled in later."""
+    del n_gates
+    rows = [np.zeros(N_FREE_GATES)]
+    for index in range(N_FREE_GATES):
         for sign in (-1.0, 1.0):
             for scale in (0.5, 1.0):
-                row = np.zeros(n_interior)
+                row = np.zeros(N_FREE_GATES)
                 row[index] = sign * scale * float(step)
-                row[-1 - index] = -row[index]
                 rows.append(row)
     return np.vstack(rows)
 
 
 def _with_offsets(design, offsets):
-    design.gate_offsets = symmetric_gate_offsets(offsets)
+    design.gate_offsets = expand_free_gates(offsets)
     return design
 
 
@@ -141,9 +140,9 @@ def optimize_schedule(
 ):
     """Train on waveforms near the nominal path, then cross-entropy on the gates.
 
-    The junction, the bend, and ``(a, b)`` stay at the developed design. Four
-    waveform gates lie on the first half, the last at mid-path. The center
-    gate stays fixed and the return gates mirror the first three.
+    The junction, the bend, and ``(a, b)`` stay at the developed design. The
+    search moves the three outbound gates. The center gate stays fixed and
+    the return half mirrors them.
     """
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -160,18 +159,18 @@ def optimize_schedule(
         ),
         flush=True,
     )
-    nominal_q, nominal_total = _simulate_rows(base, np.zeros((1, n_gates - 1)), simulate_kwargs)
+    nominal_q, nominal_total = _simulate_rows(base, np.zeros((1, N_FREE_GATES)), simulate_kwargs)
     baseline = float(nominal_total[0])
 
     probes = _probe_offsets(0.04, n_gates)
     keep = [
         row for row in probes
-        if schedule_is_admissible(row, curves, n_gates, limit=offset_limit)
+        if schedule_is_admissible(expand_free_gates(row), curves, n_gates, limit=offset_limit)
     ]
     cloud = _draw_offsets(
         rng,
         max(int(n) - len(keep), 0),
-        np.zeros(n_gates - 1),
+        np.zeros(N_FREE_GATES),
         offset_std,
         curves,
         n_gates,
@@ -237,7 +236,8 @@ def optimize_schedule(
     best_quanta = quanta[best_i, 0]
     design = _with_offsets(base, best_offsets)
     length_m = float(simulate_design(design, **simulate_kwargs).length_m)
-    _plot_time_law(curves, n_gates, best_offsets, out / "time_law.png")
+    full_offsets = expand_free_gates(best_offsets)
+    _plot_time_law(curves, n_gates, full_offsets, out / "time_law.png")
     from .plotting import plot_best_design
 
     plot_best_design(
@@ -258,7 +258,7 @@ def optimize_schedule(
         "junction and bend fixed at the nominal design",
         force_line(simulate_kwargs),
         stray_field_line(simulate_kwargs),
-        "interior time gates: {}".format(n_gates - 1),
+        "free waveform gates: {}".format(N_FREE_GATES),
         "training waveforms before the search: {}".format(n_before),
         "waveforms simulated: {}".format(len(offsets)),
         "nominal quanta: {}".format(" ".join("{:.6g}".format(float(v)) for v in nominal_q.reshape(-1))),
@@ -267,7 +267,7 @@ def optimize_schedule(
         "best total quanta: {:.6g}".format(best_total),
         "reduction factor: {:.4g}".format(factor),
         "best gate shifts (um along the path): {}".format(
-            " ".join("{:.3g}".format(float(v) * length_m * 1e6) for v in best_offsets)
+            " ".join("{:.3g}".format(float(v) * length_m * 1e6) for v in full_offsets)
         ),
     ]
     for iteration, heating, count in rounds:

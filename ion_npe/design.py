@@ -74,6 +74,40 @@ def symmetric_gate_offsets(offsets):
     return values
 
 
+# Outbound gates of a symmetric waveform. The center gate is fixed at 0, and
+# the return half is the mirror of these three, so a search stores only these.
+N_FREE_GATES = 3
+
+
+def expand_free_gates(free):
+    """Seven round-trip offsets from the three outbound gates.
+
+    A vector that is already seven offsets is symmetrized instead. The center
+    gate stays at 0.
+    """
+    values = np.asarray(free, dtype=float).reshape(-1)
+    if values.size == 7:
+        return symmetric_gate_offsets(values)
+    if values.size != N_FREE_GATES:
+        raise ValueError(
+            "waveform gates must be {} free offsets or 7 round-trip offsets, got {}".format(
+                N_FREE_GATES, values.size
+            )
+        )
+    full = np.zeros(7)
+    full[:N_FREE_GATES] = values
+    full[-N_FREE_GATES:] = -values[::-1]
+    return full
+
+
+def free_gate_offsets(offsets):
+    """The three outbound gates. A round-trip vector is symmetrized first."""
+    values = np.asarray(offsets, dtype=float).reshape(-1)
+    if values.size == N_FREE_GATES:
+        return values.astype(float, copy=True)
+    return expand_free_gates(values)[:N_FREE_GATES].copy()
+
+
 def bend_centerline(bend_x, handle, end_handle, cross_s, n=4000):
     """Quadratic from the arm tangent to the mirror tangent, and its normal.
 

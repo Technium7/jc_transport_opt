@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from .dataset import design_is_admissible
-from .design import DesignSpace, symmetric_gate_offsets
+from .design import DesignSpace, N_FREE_GATES, expand_free_gates, free_gate_offsets
 from .schedule import schedule_is_admissible
 from .simulate import simulation_settings, total_heating
 from .train import train_predictor
@@ -27,7 +27,7 @@ def _design_from(space, nominal, trajectory, gates):
     full = np.array(nominal, copy=True)
     full[8:] = trajectory
     design = space.unpack(full)
-    design.gate_offsets = symmetric_gate_offsets(gates)
+    design.gate_offsets = expand_free_gates(gates)
     return design
 
 
@@ -50,7 +50,7 @@ def _draw(rng, n, mean, std, lower, upper, space, nominal, limit):
         design = _design_from(space, nominal, trajectory, gates)
         if _ok(design, limit):
             drawn_t.append(trajectory)
-            drawn_g.append(np.asarray(design.gate_offsets, dtype=float).copy())
+            drawn_g.append(np.asarray(gates, dtype=float).copy())
     if len(drawn_t) < int(n):
         raise RuntimeError("could not draw enough admissible trajectories")
     return np.vstack(drawn_t), np.vstack(drawn_g)
@@ -89,14 +89,15 @@ def optimize_trajectory(
     upper = space.upper[8:]
     span = upper - lower
     nominal_traj = nominal[8:]
-    n_gates = space.nominal_design().n_time_gates - 1
     saved = Path("outputs/schedule/schedule.npz")
     if saved.exists():
-        best_gates = np.asarray(np.load(saved)["best_offsets"], dtype=float).reshape(-1)
-        if best_gates.size != n_gates:
-            best_gates = np.zeros(n_gates)
+        loaded = np.asarray(np.load(saved)["best_offsets"], dtype=float).reshape(-1)
+        if loaded.size in (N_FREE_GATES, 7):
+            best_gates = free_gate_offsets(loaded)
+        else:
+            best_gates = np.zeros(N_FREE_GATES)
     else:
-        best_gates = np.zeros(n_gates)
+        best_gates = np.zeros(N_FREE_GATES)
     rng = np.random.default_rng(seed)
 
     probe_t, probe_g = _reference_rows(nominal_traj, best_gates)
@@ -106,7 +107,7 @@ def optimize_trajectory(
         design = _design_from(space, nominal, trajectory, gates)
         if _ok(design, offset_limit):
             keep_t.append(np.clip(trajectory, lower, upper))
-            keep_g.append(np.asarray(design.gate_offsets, dtype=float).copy())
+            keep_g.append(np.asarray(gates, dtype=float).copy())
     unit_std = np.where(free_columns, 0.28, 0.06)
     cloud_t, cloud_g = _draw(
         rng,
