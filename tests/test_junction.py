@@ -121,6 +121,23 @@ class JunctionElectrodeTests(unittest.TestCase):
         tilt = junction["dc_tilt_0_0"].paths[0]
         self.assertLess(float(_distance_to_rails(tilt, rails).min()), RF_GAP + 2e-3)
 
+    def test_center_stays_one_rf_gap_from_a_moved_rail(self):
+        space = DesignSpace()
+        controls = space.nominal().copy()
+        controls[0] = space.upper[0]
+        junction = build_junction(controls[:8])
+        center = junction["dc_center"].paths[0]
+        rails = junction["r"].paths
+        distance = _distance_to_rails(center, rails)
+        angles = np.arctan2(center[:, 1], center[:, 0])
+        facing = np.zeros(len(center), dtype=bool)
+        for target in (0.0, 2.0 * np.pi / 3.0, -2.0 * np.pi / 3.0):
+            delta = np.abs(np.arctan2(np.sin(angles - target), np.cos(angles - target)))
+            facing |= delta < np.radians(15.0)
+        self.assertGreater(int(np.count_nonzero(facing)), 0)
+        self.assertGreaterEqual(float(distance.min()), RF_GAP - 2e-3)
+        self.assertLess(float(distance[facing].max()), RF_GAP + 0.01)
+
     def test_design_box_corners_build(self):
         space = DesignSpace()
         for controls in (space.lower[:8], space.upper[:8]):

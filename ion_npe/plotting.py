@@ -10,7 +10,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-from .constants import ION_HEIGHT_M, L_SCALE, TRANSPORT_SPEED_M_S
+from .constants import ION_HEIGHT_M, L_SCALE, RF_SEP, RF_WIDTH, TRANSPORT_SPEED_M_S
 from .simulate import total_heating
 from .trajectory import (
     arm_polygon,
@@ -25,6 +25,7 @@ _RF_FACE = "#4C78A8"
 _DC_FACE = "#F2C14E"
 _RF_EDGE = "#2F5A80"
 _DC_EDGE = "#A67C1F"
+_JUNCTION_MARK = "#C44E00"
 
 
 def _draw_junction_electrodes(ax, junction, rf_alpha=0.38, dc_alpha=0.28, lw=0.25):
@@ -40,6 +41,95 @@ def _draw_junction_electrodes(ax, junction, rf_alpha=0.38, dc_alpha=0.28, lw=0.2
                 closed[:, 0], closed[:, 1],
                 facecolor=face, edgecolor=edge, alpha=alpha, lw=lw, zorder=zorder,
             )
+
+
+def _rail_control_points(controls, rf_sep=RF_SEP, rf_w=RF_WIDTH):
+    """Inner and outer spline handles of the rail that bulges toward +x.
+
+    The eight search coordinates are these handles. ``ai`` and ``ai + da`` sit
+    on the x axis. ``(bi_x, bi_y)`` and ``(bo_x, bo_y)`` are the shoulders, and
+    ``ci_l`` and ``co_l`` are the along-arm stations where the splines meet the
+    straight arm. The other two rails are this one rotated by 120 and 240 degrees.
+    """
+    ai, da, bi_x, bi_y, bo_x, bo_y, ci_l, co_l = np.asarray(controls, dtype=float).reshape(8)
+    angle = np.pi / 3.0
+
+    def tip(length, lateral):
+        return np.array([
+            np.cos(angle) * length + np.sin(angle) * lateral,
+            np.sin(angle) * length - np.cos(angle) * lateral,
+        ])
+
+    inner = np.vstack([
+        tip(ci_l, rf_sep / 2.0),
+        [bi_x, bi_y],
+        [ai, 0.0],
+        [bi_x, -bi_y],
+        tip(ci_l, rf_sep / 2.0) * np.array([1.0, -1.0]),
+    ])
+    outer = np.vstack([
+        tip(co_l, rf_sep / 2.0 + rf_w),
+        [bo_x, bo_y],
+        [ai + da, 0.0],
+        [bo_x, -bo_y],
+        tip(co_l, rf_sep / 2.0 + rf_w) * np.array([1.0, -1.0]),
+    ])
+    return inner, outer
+
+
+def _mark_junction_controls(ax, controls, fontsize=7):
+    """Draw and name the eight junction controls on the +x rail.
+
+    ``bi`` and ``ci_l`` sit on top of each other, and ``bo`` sits next to the
+    outer nose, so each name is pulled off the rail on its own leader.
+    """
+    inner, outer = _rail_control_points(controls)
+    color = _JUNCTION_MARK
+    ax.plot(inner[:, 0], inner[:, 1], color=color, lw=0.8, ls=":", zorder=8)
+    ax.plot(outer[:, 0], outer[:, 1], color=color, lw=0.8, ls=":", zorder=8)
+    points = np.vstack([inner, outer])
+    ax.scatter(points[:, 0], points[:, 1], s=16, marker="D", color=color, zorder=9)
+    nose = inner[2]
+    outer_nose = outer[2]
+    ax.annotate(
+        "",
+        xy=outer_nose,
+        xytext=nose,
+        arrowprops=dict(arrowstyle="<->", color=color, lw=0.9),
+        zorder=9,
+    )
+    labels = (
+        ("ci_l", inner[0], inner[0] + (0.35, 1.15), "left"),
+        ("bi_x, bi_y", inner[1], inner[1] + (-1.55, 1.05), "right"),
+        ("ai", nose, nose + (-1.05, -0.75), "right"),
+        ("co_l", outer[0], outer[0] + (0.55, 0.85), "left"),
+        ("bo_x, bo_y", outer[1], outer[1] + (1.05, 0.95), "left"),
+        ("da", 0.5 * (nose + outer_nose), 0.5 * (nose + outer_nose) + (0.2, -1.25), "center"),
+    )
+    anchors = []
+    for text, point, text_xy, align in labels:
+        anchors.append(text_xy)
+        ax.annotate(
+            text,
+            xy=point,
+            xytext=text_xy,
+            textcoords="data",
+            ha=align,
+            va="center",
+            fontsize=fontsize,
+            color=color,
+            zorder=10,
+            arrowprops=dict(arrowstyle="-", color=color, lw=0.6, shrinkA=1, shrinkB=3),
+            bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.92),
+        )
+    return np.vstack([points, np.vstack(anchors)])
+
+
+def _junction_legend_handle():
+    return Line2D(
+        [0], [0], color=_JUNCTION_MARK, ls=":", lw=0.8, marker="D",
+        markersize=4, label="junction controls",
+    )
 
 
 def _electrode_xy(junction, dc_only=False):
@@ -66,7 +156,8 @@ def plot_trajectory(design, path, out):
     the DC/RF response function. Squares are the clamped ends of the bend.
     Triangles are the fixed arm controls and circles are the bend controls.
     Bend controls are RF-null radius and height. The ion still starts and
-    ends at 50 um.
+    ends at 50 um. Orange diamonds name the eight junction controls on the
+    rail that bulges toward +x.
     """
     from .junction import build_junction
 
@@ -104,7 +195,10 @@ def plot_trajectory(design, path, out):
         free[:, 0], free[:, 1], s=32, marker="o", facecolors="none",
         edgecolors="#E45756", linewidths=1.2, zorder=6, label="bend controls",
     )
-    span = np.vstack([path[:, :2], controls[:, :2], _electrode_xy(junction, dc_only=True)])
+    rail = _mark_junction_controls(ax, design.junction)
+    span = np.vstack([
+        path[:, :2], controls[:, :2], rail, _electrode_xy(junction, dc_only=True),
+    ])
     pad = 0.35
     ax.set_xlim(span[:, 0].min() - pad, span[:, 0].max() + pad)
     ax.set_ylim(span[:, 1].min() - pad, span[:, 1].max() + pad)
@@ -125,10 +219,11 @@ def plot_trajectory(design, path, out):
                 [0], [0], marker="o", color="#E45756", ls="none",
                 markerfacecolor="none", label="bend controls",
             ),
+            _junction_legend_handle(),
         ],
         frameon=False, fontsize=8, loc="upper left",
     )
-    inset = ax.inset_axes([0.20, 0.55, 0.74, 0.40])
+    inset = ax.inset_axes([0.04, 0.04, 0.58, 0.36])
     _draw_junction_electrodes(inset, junction, rf_alpha=0.45, dc_alpha=0.32)
     inset.scatter(
         path[:, 0], path[:, 1], c=height_um, s=8, cmap="viridis",
@@ -220,9 +315,10 @@ def plot_best_design(design, out, reference=None, total_quanta=None, title=None)
 
     The path is colored by the ion's speed. The filled electrodes are the RF
     rails and segmented DC electrodes from ``build_junction``, the same set
-    used to compute the unit-volt response function. ``reference`` is the
-    nominal design, drawn dashed on the junction, the bend, the speed, and
-    the height.
+    used to compute the unit-volt response function. Orange diamonds name the
+    eight junction controls on the rail that bulges toward +x. ``reference``
+    is the nominal design, drawn dashed on the junction, the bend, the speed,
+    and the height.
     """
     from .junction import build_junction
 
@@ -260,7 +356,8 @@ def plot_best_design(design, out, reference=None, total_quanta=None, title=None)
         xyz[gate_index, 0], xyz[gate_index, 1], s=34, marker="D",
         facecolors="white", edgecolors="#333333", linewidths=0.9, zorder=7,
     )
-    span = np.vstack([xyz[:, :2], _electrode_xy(junction, dc_only=True)])
+    rail = _mark_junction_controls(ax, design.junction)
+    span = np.vstack([xyz[:, :2], rail, _electrode_xy(junction, dc_only=True)])
     pad = 0.35
     ax.set_xlim(span[:, 0].min() - pad, span[:, 0].max() + pad)
     ax.set_ylim(span[:, 1].min() - pad, span[:, 1].max() + pad)
@@ -286,6 +383,7 @@ def plot_best_design(design, out, reference=None, total_quanta=None, title=None)
                 [0], [0], marker="D", color="#333333", ls="none",
                 markerfacecolor="white", markersize=5, label="time gates",
             ),
+            _junction_legend_handle(),
         ],
         frameon=False, fontsize=8, loc="upper left",
     )

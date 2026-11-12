@@ -330,19 +330,60 @@ def _extend_curve(spline, arm_end, lateral):
 
 
 
-def _center_triangle(center_len):
-    """Equilateral triangle whose flats face the three arms.
+def _point_clear(point, rails, rf_gap):
+    """True when ``point`` is outside every rail by at least ``rf_gap``."""
+    sample = np.asarray(point, dtype=float).reshape(1, 2)
+    for rail in rails:
+        distance, inside = _rail_distance(sample, rail)
+        if bool(inside[0]) or float(distance[0]) < rf_gap:
+            return False
+    return True
 
-    ``center_len`` is the distance from the origin to each flat. A 30 degree
-    rotation puts a vertex on each RF rail and a flat on each arm.
+
+def _channel_apertures(rails, center_len, rf_gap):
+    """Arm direction and the lateral reach of the channel at ``center_len``.
+
+    Each side is the largest offset that still leaves one RF gap, so the
+    center electrode meets whatever rail this design produced.
     """
-    width = center_len * np.sqrt(3.0) * 2.0
-    triangle = np.array([
-        [-width / 2.0, -width / (2.0 * np.sqrt(3.0))],
-        [width / 2.0, -width / (2.0 * np.sqrt(3.0))],
-        [0.0, width / np.sqrt(3.0)],
-    ])
-    return _rotate(triangle, np.pi / 6.0)
+    apertures = []
+    for turn in range(3):
+        angle = np.pi + turn * 2.0 * np.pi / 3.0
+        arm = np.array([np.cos(angle), np.sin(angle)])
+        perp = np.array([-arm[1], arm[0]])
+        sides = []
+        for sign in (1.0, -1.0):
+            low, high = 0.0, 3.0
+            for _step in range(24):
+                mid = 0.5 * (low + high)
+                point = center_len * arm + sign * mid * perp
+                if _point_clear(point, rails, rf_gap):
+                    low = mid
+                else:
+                    high = mid
+            sides.append(low)
+        apertures.append((arm, sides[0], sides[1]))
+    return apertures
+
+
+def _arm_aperture_radius(direction, center_len, apertures):
+    """Radius where a ray meets an arm aperture, or infinity.
+
+    The aperture is the channel cross-section at ``center_len``. A ray aimed
+    at a rail misses it and runs on to the rail.
+    """
+    best = np.inf
+    direction = np.asarray(direction, dtype=float)
+    for arm, lat_pos, lat_neg in apertures:
+        alignment = float(np.dot(direction, arm))
+        if alignment <= 1e-8:
+            continue
+        radius = float(center_len) / alignment
+        perp = np.array([-arm[1], arm[0]])
+        lateral = radius * float(np.dot(direction, perp))
+        if -lat_neg - 1e-9 <= lateral <= lat_pos + 1e-9:
+            best = min(best, radius)
+    return best
 
 
 def _inside_polygon(poly, points):
@@ -374,22 +415,30 @@ def _rail_distance(points, rail):
     return distance, _inside_polygon(rail, points)
 
 
-def _center_polygon(triangle, rails, rf_gap, n_angles=180):
-    """Center triangle with the RF rails, plus one RF gap, removed.
+def _center_polygon(rails, rf_gap, center_len, n_angles=360):
+    """Center electrode for this RF design.
 
-    Along each ray from the origin the electrode stops at the triangle or at
-    the first point that enters an RF keep-out.
+    Toward each rail the boundary stops one RF gap from that rail, so a new
+    spline does not open a hole. Down each arm it stops on the channel
+    cross-section at ``center_len``, and the segmented inner electrodes begin
+    after the DC gap.
     """
-    triangle = np.asarray(triangle, dtype=float)
-    closed = np.vstack([triangle, triangle[:1]])
+    apertures = _channel_apertures(rails, center_len, rf_gap)
     angles = np.linspace(0.0, 2.0 * np.pi, int(n_angles), endpoint=False)
     directions = np.column_stack([np.cos(angles), np.sin(angles)])
-    limits = np.array([_ray_radius(closed, direction) for direction in directions])
-    if not np.isfinite(limits).all():
-        raise ValueError("center DC electrode is not closed around the origin")
+    caps = np.empty(len(angles))
+    for index, direction in enumerate(directions):
+        aperture = _arm_aperture_radius(direction, center_len, apertures)
+        rail_hit = min(
+            _ray_radius(np.vstack([rail, rail[:1]]), direction) for rail in rails
+        )
+        cap = min(aperture, rail_hit)
+        if not np.isfinite(cap):
+            raise ValueError("center DC ray does not meet a rail or an arm aperture")
+        caps[index] = cap
     low = np.zeros(len(angles))
-    high = limits.copy()
-    for _step in range(16):
+    high = caps.copy()
+    for _step in range(24):
         mid = 0.5 * (low + high)
         points = directions * mid[:, None]
         clear = np.ones(len(angles), dtype=bool)
@@ -448,8 +497,8 @@ def _inner_spans(cutoff, center_len, n_inner, dc_gap):
     return spans
 
 
-def _arm_polygon(x_far, x_near, upper, lower, half_width, n_samples=24):
-    """One inner electrode, clipped to the RF gap along the arm."""
+def _arm_polygon(x_far, x_near, upper, lower, n_samples=24):
+    """One inner electrode. Its long edges are the RF-gap offset of the rails."""
     if x_near - x_far < 1e-6:
         raise ValueError("inner electrode has no length")
     xs = np.linspace(x_far, x_near, n_samples)
@@ -460,8 +509,6 @@ def _arm_polygon(x_far, x_near, upper, lower, half_width, n_samples=24):
         y_lower = _crossing_y(lower, x, -1.0)
         if not np.isfinite(y_upper) or not np.isfinite(y_lower):
             raise ValueError("inner electrode leaves the RF channel")
-        y_upper = min(y_upper, half_width)
-        y_lower = max(y_lower, -half_width)
         if y_upper - y_lower < 1e-3:
             break
         top.append([x, y_upper])
@@ -569,16 +616,15 @@ def _segmented_dc_electrodes(
     outer_edge = _extend_curve(outer_spline, arm_end, rf_sep / 2.0 + rf_w)
     inner_edges = [_rotate(inner_edge, turn * 2.0 * np.pi / 3.0) for turn in range(3)]
     outer_edges = [_rotate(outer_edge, turn * 2.0 * np.pi / 3.0) for turn in range(3)]
-    center = _center_polygon(_center_triangle(center_len), rails, rf_gap)
 
     # Arm 0 is negative x. Rail 1 (120 degrees) is its upper wall and rail 2
     # its lower wall. The walls used here are already inset by the RF gap.
     upper_wall = _offset_away(inner_edges[1], rf_gap, outer_edges[1])
     lower_wall = _offset_away(inner_edges[2], rf_gap, outer_edges[2])
-    half_width = rf_sep / 2.0 - rf_gap
+    center = _center_polygon(rails, rf_gap, center_len)
     arm_paths = []
     for x_far, x_near in _inner_spans(cutoff, center_len, n_inner, dc_gap):
-        arm_paths.append(_arm_polygon(x_far, x_near, upper_wall, lower_wall, half_width))
+        arm_paths.append(_arm_polygon(x_far, x_near, upper_wall, lower_wall))
 
     tilt_radial = rf_sep / 2.0 + rf_w + rf_gap + outer_tilt
     outer_radial = tilt_radial + dc_gap + outer_length
