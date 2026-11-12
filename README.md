@@ -1,6 +1,6 @@
 # Ion trap junction design with a stochastic network
 
-This project simulates Y-junction ion transport and co-optimizes the junction geometry together with a three-dimensional trajectory. The ion starts and ends at 50 μm. The bend radius `s` (`cross_s`) builds the tangent-matched curve, and the seven bend controls are samples of that curve. Their `(x, y)` stays on the curve. Training varies the junction, the bend radius `s`, and the time profile `(a, b)`. `s` stays within 15 μm of the RF center. Height stays at 50 μm. The transport waveform is symmetric about mid-path. The search stores the three outbound gates. The center gate stays at the nominal time, and the return half is their mirror.
+This project simulates Y-junction ion transport and co-optimizes the junction geometry together with a three-dimensional trajectory. The ion starts and ends at 50 μm. The bend radius `s` (`cross_s`) builds the tangent-matched curve, and the seven bend controls are samples of that curve. Their `(x, y)` stays on the curve. Training varies the junction, the bend radius `s`, the seven control heights, and the time profile `(a, b)`. `s` and each control height stay within 15 μm of the RF center. The transport waveform is symmetric about mid-path. The search stores the four outbound gates. The center gate stays at the nominal time, and the return half is their mirror. Anomalous heating is 300 quanta/s at 1.5 MHz and scales as ω⁻². `--heating velocity` adds that energy to each mode's velocity at every step. `--heating end` accumulates the same quanta and adds them at the end of the transport.
 
 The dynamics are the developed symplectic integrator. The RF pseudopotential comes from the junction electrodes. The default DC force is the electrode field of the least-squares voltage solution on the segmented DC electrodes: each 100 ns update is solved for the target well, then the ion is integrated in that held field. The ideal harmonic well is only an optional comparison. The stray field is off unless `--noise` is set. A network predicts the final motional quanta. A stochastic network injects input-dependent noise into its first hidden layer and is trained so that noise reproduces the spread of the simulated heating. Training is Adam followed by full-batch L-BFGS. A cross-entropy loop uses that prediction to choose which designs to simulate, fine-tunes the network the same way, and refits the sampling distribution to the best simulated designs.
 
@@ -10,7 +10,7 @@ The dynamics are the developed symplectic integrator. The RF pseudopotential com
 | --- | --- |
 | `ion_npe/design.py` | Junction controls, bend radius, and the time profile |
 | `ion_npe/junction.py` | Symmetric Y-junction and the RF Laplacian |
-| `ion_npe/trajectory.py` | Round-trip path. Bend `(x, y)` comes from radius `s`; height stays at 50 μm |
+| `ion_npe/trajectory.py` | Round-trip path. Bend `(x, y)` comes from radius `s`; control heights are searched within 15 μm |
 | `ion_npe/dynamics.py` | Path frame, stray field, velocity Verlet |
 | `ion_npe/simulate.py` | One design in, final quanta out |
 | `ion_npe/parallel.py` | Split a simulation batch across SLURM tasks |
@@ -22,7 +22,7 @@ The dynamics are the developed symplectic integrator. The RF pseudopotential com
 | `ion_npe/study.py` | Nominal-centered data, Adam+L-BFGS, and repeated active rounds |
 | `ion_npe/plotting.py` | Path, loss, and search figures |
 
-The design vector is the eight junction controls `ai, da, bi_x, bi_y, bo_x, bo_y, ci_l, co_l`, the bend radius `cross_s`, and the time-profile pair `(a, b)`. Joint and nearby searches append the three outbound waveform gates. The center gate stays at the nominal time, and the return half mirrors those three. The spline still uses all seven interior gates. `cross_s` fixes the bend `(x, y)`. At `cross_s = 0.1` that `(x, y)` is the developed bend. The arm path and the crossing height stay at the developed design. The start and the end stay at 50 μm. Also fixed are the ion mass, RF gap and width, RF voltage and frequency, transport speed, and the target axial and radial frequencies.
+The design vector is the eight junction controls `ai, da, bi_x, bi_y, bo_x, bo_y, ci_l, co_l`, the bend radius `cross_s`, the seven bend-control heights `c0_z` through `c6_z`, and the time-profile pair `(a, b)`. Joint and nearby searches append the four outbound waveform gates. The center gate stays at the nominal time, and the return half mirrors those four. The spline uses nine interior gates. `cross_s` fixes the bend `(x, y)`. At `cross_s = 0.1` that `(x, y)` is the developed bend. The arm path and the crossing height stay at the developed design. The start and the end stay at 50 μm. Also fixed are the ion mass, RF gap and width, RF voltage and frequency, transport speed, and the target axial and radial frequencies.
 
 ## Run
 

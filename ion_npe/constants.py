@@ -19,6 +19,10 @@ OMEGA_RF = 2.0 * np.pi * 40e6
 F_AXIAL = 1e6
 F_RADIAL = 3e6
 
+# Anomalous heating: 300 quanta per second at 1.5 MHz, scaling as omega^{-2}.
+HEATING_QUANTA_PER_S = 300.0
+HEATING_REF_HZ = 1.5e6
+
 # Ion integration step. Voltage updates are an integer number of these steps.
 SIM_DT = 1e-9
 

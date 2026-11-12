@@ -139,15 +139,15 @@ def _eval_spline_1d(coeffs, times, dt):
     return values
 
 
-def time_gate_samples(curves, n_gates=8, gate_offsets=None):
+def time_gate_samples(curves, n_gates=10, gate_offsets=None):
     """Arc-fraction samples of the transport waveform, including the fixed ends.
 
     ``gate_offsets`` moves the interior samples, the same freedom as the
     intermediate gates in the straight-line transport search. The ends stay
     at 0 and 1, and the spline still leaves and arrives at rest. The interior
     gates are equally spaced and one sits at mid-path. A symmetric waveform
-    uses the four gates from the start through that center. The center offset
-    stays at zero, and the gates after it mirror the first three.
+    uses the five gates from the start through that center. The center offset
+    stays at zero, and the gates after it mirror the first four.
     """
     a, b = curves
     knots = np.linspace(0.0, 1.0, int(n_gates) + 1)
@@ -164,18 +164,18 @@ def time_gate_samples(curves, n_gates=8, gate_offsets=None):
     return knots, samples
 
 
-def one_sided_time_gates(curves, n_gates=8, gate_offsets=None):
+def one_sided_time_gates(curves, n_gates=10, gate_offsets=None):
     """Interior gates on the first half, including the center gate.
 
     Returns ``(tau, arc fraction)``. The last gate is at mid-path. Gates on
-    the return half are the mirrors of the first three and are not included.
+    the return half are the mirrors of the first four and are not included.
     """
     knots, samples = time_gate_samples(curves, n_gates, gate_offsets)
     center = 1 + (samples.size - 2) // 2
     return knots[1:center + 1], samples[1:center + 1]
 
 
-def s_of_tau(tau, curves, n_gates=8, gate_offsets=None):
+def s_of_tau(tau, curves, n_gates=10, gate_offsets=None):
     """Arc-length fraction versus tau. Velocity is zero at tau = 0 and tau = 1."""
     knots, samples = time_gate_samples(curves, n_gates, gate_offsets)
     dt = np.diff(knots)

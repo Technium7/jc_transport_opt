@@ -4,8 +4,8 @@ That search cut the phonon number by about 10x by moving the intermediate
 gates of an otherwise fixed transport and keeping the cross-entropy cloud on
 the designs that had just been simulated. The junction and the spatial bend
 stay at the nominal design. Only the interior samples of the time law move.
-The search stores the three outbound gates. The center gate stays fixed, and
-the return half is their mirror. The spline is expanded to seven gates only
+The search stores the four outbound gates. The center gate stays fixed, and
+the return half is their mirror. The spline is expanded to nine gates only
 when a waveform is checked or simulated.
 """
 
@@ -56,7 +56,7 @@ def _draw_offsets(rng, n, mean, std, curves, n_gates, limit):
 
 
 def _probe_offsets(step, n_gates):
-    """Moves of the three outbound gates. The return half is filled in later."""
+    """Moves of the four outbound gates. The return half is filled in later."""
     del n_gates
     rows = [np.zeros(N_FREE_GATES)]
     for index in range(N_FREE_GATES):
@@ -141,7 +141,7 @@ def optimize_schedule(
     """Train on waveforms near the nominal path, then cross-entropy on the gates.
 
     The junction, the bend, and ``(a, b)`` stay at the developed design. The
-    search moves the three outbound gates. The center gate stays fixed and
+    search moves the four outbound gates. The center gate stays fixed and
     the return half mirrors them.
     """
     out = Path(out)

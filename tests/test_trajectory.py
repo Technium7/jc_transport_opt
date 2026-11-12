@@ -39,15 +39,18 @@ class TrajectoryTests(unittest.TestCase):
 
     def test_a_design_waveform_is_symmetric_about_mid_path(self):
         design = DesignSpace().nominal_design()
-        design.gate_offsets = np.array([0.04, -0.02, 0.03, 0.01, -0.03, 0.02, -0.04])
+        design.gate_offsets = np.array([
+            0.04, -0.02, 0.03, 0.01, 0.0, -0.01, -0.03, 0.02, -0.04,
+        ])
         gates = design.gate_offsets
-        self.assertEqual(len(gates), 7)
-        self.assertAlmostEqual(float(gates[0]), -float(gates[6]))
-        self.assertAlmostEqual(float(gates[1]), -float(gates[5]))
-        self.assertAlmostEqual(float(gates[2]), -float(gates[4]))
-        self.assertEqual(float(gates[3]), 0.0)
+        self.assertEqual(len(gates), 9)
+        self.assertAlmostEqual(float(gates[0]), -float(gates[8]))
+        self.assertAlmostEqual(float(gates[1]), -float(gates[7]))
+        self.assertAlmostEqual(float(gates[2]), -float(gates[6]))
+        self.assertAlmostEqual(float(gates[3]), -float(gates[5]))
+        self.assertEqual(float(gates[4]), 0.0)
         tau_gates, shown = one_sided_time_gates(design.curves, design.n_time_gates, gates)
-        self.assertEqual(len(shown), 4)
+        self.assertEqual(len(shown), 5)
         self.assertAlmostEqual(float(tau_gates[-1]), 0.5)
         np.testing.assert_allclose(symmetric_gate_offsets(gates), gates)
         tau = np.linspace(0.0, 1.0, 241)

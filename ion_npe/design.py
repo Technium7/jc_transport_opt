@@ -1,10 +1,10 @@
 """Junction and trajectory design vector.
 
 The search coordinates are the eight symmetric Y-junction controls, the bend
-radius ``cross_s``, and the ``(a, b)`` time profile. ``cross_s`` fixes the
-bend ``(x, y)``. Those coordinates are not separate search parameters.
-``cross_s`` stays within 15 um of the RF center. Every control height stays
-at the nominal 50 um. The arm stays on the developed path.
+radius ``cross_s``, the seven bend-control heights, and the ``(a, b)`` time
+profile. ``cross_s`` fixes the bend ``(x, y)``. Those coordinates are not
+separate search parameters. ``cross_s`` and each control height stay within
+15 um of the RF center. The arm stays on the developed path.
 """
 
 from dataclasses import dataclass, field
@@ -75,33 +75,35 @@ def symmetric_gate_offsets(offsets):
 
 
 # Outbound gates of a symmetric waveform. The center gate is fixed at 0, and
-# the return half is the mirror of these three, so a search stores only these.
-N_FREE_GATES = 3
+# the return half is the mirror of these four, so a search stores only these.
+N_FREE_GATES = 4
+N_SPLINE_GATES = 2 * N_FREE_GATES + 1
+N_TIME_GATES = N_SPLINE_GATES + 1
 
 
 def expand_free_gates(free):
-    """Seven round-trip offsets from the three outbound gates.
+    """Nine round-trip offsets from the four outbound gates.
 
-    A vector that is already seven offsets is symmetrized instead. The center
+    A vector that is already nine offsets is symmetrized instead. The center
     gate stays at 0.
     """
     values = np.asarray(free, dtype=float).reshape(-1)
-    if values.size == 7:
+    if values.size == N_SPLINE_GATES:
         return symmetric_gate_offsets(values)
     if values.size != N_FREE_GATES:
         raise ValueError(
-            "waveform gates must be {} free offsets or 7 round-trip offsets, got {}".format(
-                N_FREE_GATES, values.size
+            "waveform gates must be {} free offsets or {} round-trip offsets, got {}".format(
+                N_FREE_GATES, N_SPLINE_GATES, values.size
             )
         )
-    full = np.zeros(7)
+    full = np.zeros(N_SPLINE_GATES)
     full[:N_FREE_GATES] = values
     full[-N_FREE_GATES:] = -values[::-1]
     return full
 
 
 def free_gate_offsets(offsets):
-    """The three outbound gates. A round-trip vector is symmetrized first."""
+    """The four outbound gates. A round-trip vector is symmetrized first."""
     values = np.asarray(offsets, dtype=float).reshape(-1)
     if values.size == N_FREE_GATES:
         return values.astype(float, copy=True)
@@ -185,6 +187,7 @@ def interior_xyz_from_sz(
 
 
 def _feature_table():
+    z_half = HEIGHT_CAP_M / L_SCALE
     rows = [
         ("ai", -0.25, 0.35),
         ("da", 0.90, 2.30),
@@ -195,9 +198,13 @@ def _feature_table():
         ("ci_l", 0.60, 1.80),
         ("co_l", 3.50, 6.50),
         ("cross_s", 0.0, _CROSS_HI),
+    ]
+    for index in range(N_INTERIOR):
+        rows.append(("c{}_z".format(index), ION_HEIGHT - z_half, ION_HEIGHT + z_half))
+    rows.extend([
         ("curve_a", 1.20, 5.50),
         ("curve_b", 0.60, 2.80),
-    ]
+    ])
     return tuple(rows)
 
 
@@ -211,7 +218,7 @@ class TransportDesign:
 
     ``cross_s`` is the bend radius. It fixes the control ``(x, y)``. Those
     coordinates are not separate search parameters. ``interior_z`` is the
-    height of each control and stays at 50 um for every sampled design.
+    height of each bend control and stays within 15 um of 50 um.
     ``arm_xyz`` is fixed. The start and end stay at 50 um.
     """
 
@@ -225,7 +232,7 @@ class TransportDesign:
     handle: float = 0.12
     end_handle: float = 0.048
     arm_handle: float = 0.12
-    n_time_gates: int = 8
+    n_time_gates: int = N_TIME_GATES
     gate_offsets: np.ndarray = field(default_factory=lambda: np.zeros(0))
     z_bend: float = ION_HEIGHT
     z_cross: float = ION_HEIGHT
@@ -369,7 +376,9 @@ class DesignSpace:
     def pack(self, design):
         values = np.concatenate([
             np.asarray(design.junction, dtype=float).reshape(8),
-            [float(design.cross_s), design.curves[0], design.curves[1]],
+            [float(design.cross_s)],
+            np.asarray(design.interior_z, dtype=float).reshape(N_INTERIOR),
+            [design.curves[0], design.curves[1]],
         ])
         if values.size != self.dim:
             raise ValueError("packed design has the wrong length")
@@ -381,10 +390,11 @@ class DesignSpace:
             raise ValueError(
                 "design vector has length {}, expected {}".format(x.size, self.dim)
             )
+        z0 = 9
         return TransportDesign(
             junction=x[:8],
-            interior_z=np.full(N_INTERIOR, ION_HEIGHT),
-            curves=(float(x[9]), float(x[10])),
+            interior_z=x[z0:z0 + N_INTERIOR],
+            curves=(float(x[z0 + N_INTERIOR]), float(x[z0 + N_INTERIOR + 1])),
             arm_xyz=np.array(_ARM, dtype=float),
             cross_s=x[8],
             x_start=self.x_start,
@@ -423,9 +433,8 @@ class DesignSpace:
     def sample_latin(self, rng, n, fraction=1.0, cap_fraction=None):
         """Space-filling samples. Each coordinate is split into ``n`` equal bins.
 
-        One design falls in each bin, so the radius, the junction, and
-        ``(a, b)`` cover their ranges evenly instead of clumping. Height
-        stays at 50 um.
+        One design falls in each bin, so the radius, the junction, the control
+        heights, and ``(a, b)`` cover their ranges evenly instead of clumping.
         """
         from scipy.stats.qmc import LatinHypercube
 

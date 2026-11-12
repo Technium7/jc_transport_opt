@@ -23,6 +23,7 @@ _SIM_KEYS = (
     "with_ideal",
     "sim_dt",
     "n_geom",
+    "heating",
 )
 
 _FARM = None

@@ -71,6 +71,11 @@ def simulation_settings(simulate_kwargs=None):
     kwargs = dict(simulate_kwargs or {})
     kwargs.setdefault("force", FORCE_ELECTRODE_VOLTAGES)
     kwargs.setdefault("noise_std_Vm", NOISE_STD_VM)
+    kwargs.setdefault("heating", "off")
+    if kwargs["heating"] not in ("off", "velocity", "end"):
+        raise ValueError(
+            "heating must be 'off', 'velocity', or 'end'; got {!r}".format(kwargs["heating"])
+        )
     if kwargs["force"] != FORCE_ELECTRODE_VOLTAGES:
         raise ValueError(
             "simulation force must be {!r} (solved DC electrode voltages); got {!r}".format(
@@ -80,7 +85,12 @@ def simulation_settings(simulate_kwargs=None):
     amplitude = float(kwargs["noise_std_Vm"])
     if amplitude < 0.0:
         raise ValueError("noise amplitude must be non-negative")
-    seeds = tuple(int(seed) for seed in kwargs.get("seeds", NOISE_SEEDS))
+    if "seeds" in kwargs and kwargs["seeds"] is not None:
+        seeds = tuple(int(seed) for seed in kwargs["seeds"])
+    elif amplitude == 0.0:
+        seeds = (0,)
+    else:
+        seeds = tuple(int(seed) for seed in NOISE_SEEDS)
     if not seeds:
         raise ValueError("noise seeds are empty")
     if amplitude > 0.0 and len(seeds) < len(NOISE_SEEDS):
@@ -112,6 +122,16 @@ def stray_field_line(simulate_kwargs):
     )
 
 
+def heating_line(simulate_kwargs):
+    """One summary line for anomalous heating."""
+    mode = simulate_kwargs.get("heating", "off")
+    if mode == "velocity":
+        return "anomalous heating: added to each mode velocity at every step, 300/s at 1.5 MHz, omega^-2"
+    if mode == "end":
+        return "anomalous heating: accumulated each step and added to the final quanta, 300/s at 1.5 MHz, omega^-2"
+    return "anomalous heating: off"
+
+
 def simulate_design(
     design,
     seeds=(0,),
@@ -122,6 +142,7 @@ def simulate_design(
     with_ideal=False,
     sim_dt=SIM_DT,
     n_geom=120,
+    heating="off",
 ):
     """Final motional quanta for ``design``.
 
@@ -132,6 +153,10 @@ def simulate_design(
     the path at every step, only as a comparison.
     """
     try:
+        if heating not in ("off", "velocity", "end"):
+            raise ValueError(
+                "heating must be 'off', 'velocity', or 'end'; got {!r}".format(heating)
+            )
         if force != FORCE_ELECTRODE_VOLTAGES:
             raise ValueError(
                 "simulation force must be {!r} (solved DC electrode voltages); got {!r}".format(
@@ -174,7 +199,8 @@ def simulate_design(
                 physical = quiet
             else:
                 physical = integrate_acceleration(
-                    r0, omega2, directions, n_hold, acceleration, sim_dt=sim_dt, e_path=e_path
+                    r0, omega2, directions, n_hold, acceleration, sim_dt=sim_dt, e_path=e_path,
+                    heating=heating,
                 )
                 if amplitude == 0.0:
                     quiet = physical

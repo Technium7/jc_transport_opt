@@ -10,7 +10,14 @@ Quanta are the secular energy about the continuous design path.
 
 import numpy as np
 
-from .constants import CHARGE, HBAR, MASS, SIM_DT
+from .constants import (
+    CHARGE,
+    HBAR,
+    HEATING_QUANTA_PER_S,
+    HEATING_REF_HZ,
+    MASS,
+    SIM_DT,
+)
 
 
 def hold_steps(voltage_update_s, sim_dt=SIM_DT):
@@ -115,6 +122,50 @@ def _noise_accel(directions, e_path):
     return (CHARGE / MASS) * lab
 
 
+def heating_rate(omega2):
+    """Quanta per second in each mode. 300/s at 1.5 MHz, scaling as omega^{-2}."""
+    omega2 = np.maximum(np.asarray(omega2, dtype=float), 0.0)
+    freq = np.sqrt(omega2) / (2.0 * np.pi)
+    rate = np.zeros(freq.shape, dtype=float)
+    hot = freq > 0.0
+    rate[hot] = HEATING_QUANTA_PER_S * (HEATING_REF_HZ / freq[hot]) ** 2
+    return rate
+
+
+def heating_quanta(omega2, dt):
+    """Quanta added over one step at the instantaneous trapping frequencies."""
+    return heating_rate(omega2) * float(dt)
+
+
+def heat_velocity(vel, v_path, direction, omega2_row, dt):
+    """Add the heating energy to the path-frame velocity of each mode.
+
+    A mode with relative speed zero receives the kick along its positive axis.
+    The energy added in that mode is ``dn * hbar * omega``.
+    """
+    omega2_row = np.asarray(omega2_row, dtype=float).reshape(3)
+    direction = np.asarray(direction, dtype=float)
+    speed = direction @ (np.asarray(vel, dtype=float) - np.asarray(v_path, dtype=float))
+    omega = np.sqrt(np.maximum(omega2_row, 0.0))
+    dn = heating_quanta(omega2_row, dt)
+    extra = np.where(omega > 0.0, 2.0 * dn * HBAR * omega / MASS, 0.0)
+    magnitude = np.sqrt(np.maximum(speed ** 2 + extra, 0.0))
+    signed = np.where(speed >= 0.0, magnitude, -magnitude)
+    signed = np.where(omega > 0.0, signed, speed)
+    return np.asarray(vel, dtype=float) + direction.T @ (signed - speed)
+
+
+def _heating_step(vel, v_path, direction, omega2_row, dt, heating):
+    """Apply one heating step. ``end`` only records quanta; velocity is unchanged."""
+    if heating in (None, "off"):
+        return vel, np.zeros(3)
+    if heating == "velocity":
+        return heat_velocity(vel, v_path, direction, omega2_row, dt), np.zeros(3)
+    if heating == "end":
+        return vel, heating_quanta(omega2_row, dt)
+    raise ValueError("heating must be 'off', 'velocity', or 'end'")
+
+
 def _quanta(pos, vel, center, v_path, direction, omega2_row):
     delta = pos - center
     rel = vel - v_path
@@ -124,12 +175,19 @@ def _quanta(pos, vel, center, v_path, direction, omega2_row):
     return energy / (HBAR * np.sqrt(omega2_row))
 
 
-def integrate(r0, omega2, directions, n_hold, sim_dt=SIM_DT, e_path=None, r_init=None, v_init=None):
+def integrate(
+    r0, omega2, directions, n_hold, sim_dt=SIM_DT, e_path=None, r_init=None, v_init=None,
+    heating="off",
+):
     """Velocity Verlet. ``n_hold`` 1 follows the path at every step.
 
     The well used for the force is constant for ``n_hold`` steps. Quanta use
     the continuous path. ``e_path`` is an electric field in V/m in the path
     frame at every sample, including while a voltage set is held.
+
+    ``heating`` is anomalous heating at the instantaneous trapping frequency.
+    ``velocity`` adds that energy to each mode's velocity on every step.
+    ``end`` sums the same quanta and adds them after the transport.
     """
     r0 = np.asarray(r0, dtype=float)
     omega2 = np.asarray(omega2, dtype=float)
@@ -153,6 +211,7 @@ def integrate(r0, omega2, directions, n_hold, sim_dt=SIM_DT, e_path=None, r_init
     stride = max(n_steps // 2000, 1)
     peak = np.zeros(3)
     final = np.zeros(3)
+    added = np.zeros(3)
     for i in range(n_steps):
         vel_half = vel + 0.5 * sim_dt * acc
         pos = pos + sim_dt * vel_half
@@ -162,26 +221,36 @@ def integrate(r0, omega2, directions, n_hold, sim_dt=SIM_DT, e_path=None, r_init
         if a_noise is not None:
             acc = acc + a_noise[step]
         vel = vel_half + 0.5 * sim_dt * acc
+        vel, dn = _heating_step(
+            vel, v_path[step], directions[step], omega2[step], sim_dt, heating,
+        )
+        added = added + dn
         if step % stride == 0 or step == n_steps:
             q = _quanta(pos, vel, r0[step], v_path[step], directions[step], omega2[step])
             peak = np.maximum(peak, q)
             if step == n_steps:
                 final = q
+    if heating == "end":
+        final = final + added
     return {
         "final_quanta": final,
         "peak_quanta": peak,
+        "added_quanta": added,
         "final_offset_um": (pos - r0[-1]) * 1e6,
     }
 
 
 def integrate_acceleration(
     r0, omega2, directions, n_hold, acceleration, sim_dt=SIM_DT, e_path=None, r_init=None, v_init=None,
+    heating="off",
 ):
     """Velocity Verlet driven by ``acceleration(position_m, hold_index)``.
 
     ``hold_index`` is the path sample whose voltage set is held, the same
     schedule as ``integrate``. Quanta are still measured about the continuous
-    design path. ``e_path`` is an extra field in V/m in that frame.
+    design path. ``e_path`` is an extra field in V/m in that frame. ``heating``
+    uses the trapping frequency at the current path sample, the same two modes
+    as ``integrate``.
     """
     r0 = np.asarray(r0, dtype=float)
     omega2 = np.asarray(omega2, dtype=float)
@@ -209,19 +278,27 @@ def integrate_acceleration(
     stride = max(n_steps // 2000, 1)
     peak = np.zeros(3)
     final = np.zeros(3)
+    added = np.zeros(3)
     for i in range(n_steps):
         vel_half = vel + 0.5 * sim_dt * acc
         pos = pos + sim_dt * vel_half
         step = i + 1
         acc = acc_at(pos, step)
         vel = vel_half + 0.5 * sim_dt * acc
+        vel, dn = _heating_step(
+            vel, v_path[step], directions[step], omega2[step], sim_dt, heating,
+        )
+        added = added + dn
         if step % stride == 0 or step == n_steps:
             q = _quanta(pos, vel, r0[step], v_path[step], directions[step], omega2[step])
             peak = np.maximum(peak, q)
             if step == n_steps:
                 final = q
+    if heating == "end":
+        final = final + added
     return {
         "final_quanta": final,
         "peak_quanta": peak,
+        "added_quanta": added,
         "final_offset_um": (pos - r0[-1]) * 1e6,
     }

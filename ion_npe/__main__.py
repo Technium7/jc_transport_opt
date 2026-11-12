@@ -52,6 +52,12 @@ def _add_physics(parser):
     parser.add_argument("--speed", type=float, default=TRANSPORT_SPEED_M_S, help="transport speed, m/s")
     parser.add_argument("--voltage-ns", type=float, default=VOLTAGE_UPDATE_S * 1e9, help="DC update hold, nanoseconds")
     parser.add_argument("--noise", type=float, default=NOISE_STD_VM, help="stray-field amplitude std, V/m")
+    parser.add_argument(
+        "--heating",
+        choices=("off", "velocity", "end"),
+        default="off",
+        help="anomalous heating: off, kick each mode velocity every step, or add the accumulated quanta at the end",
+    )
 
 
 def _physics(args):
@@ -59,6 +65,7 @@ def _physics(args):
         "speed_m_s": args.speed,
         "voltage_update_s": args.voltage_ns * 1e-9,
         "noise_std_Vm": args.noise,
+        "heating": args.heating,
     }
 
 

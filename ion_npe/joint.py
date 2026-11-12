@@ -1,10 +1,10 @@
 """One search over the junction, the trajectory, and the waveform.
 
 The space-filling sample trains the network. Cross-entropy rounds then
-simulate the designs that network ranks as coldest. Height stays at 50 um.
-The free trajectory coordinates are the bend radius and ``(a, b)``. The
-waveform coordinates are the three outbound gates. The center gate stays at
-0, and the return half is their mirror.
+simulate the designs that network ranks as coldest. Bend-control heights stay
+within 15 um of 50 um. The free trajectory coordinates are the bend radius,
+those heights, and ``(a, b)``. The waveform coordinates are the four outbound
+gates. The center gate stays at 0, and the return half is their mirror.
 """
 
 from pathlib import Path
@@ -20,13 +20,20 @@ from .design import (
     free_gate_offsets,
 )
 from .schedule import schedule_is_admissible
-from .simulate import force_line, simulate_design, simulation_settings, stray_field_line, total_heating
+from .simulate import (
+    force_line,
+    heating_line,
+    simulate_design,
+    simulation_settings,
+    stray_field_line,
+    total_heating,
+)
 from .active import active_ranking
 from .train import finetune, train_predictor
 
-# The spline still has seven interior gates. The search stores the three
-# outbound gates. The center gate is fixed, and the return half mirrors them.
-N_GATES = 7
+# The spline has nine interior gates. The search stores the four outbound
+# gates. The center gate is fixed, and the return half mirrors them.
+N_GATES = 2 * N_FREE_GATES + 1
 GATE_LIMIT = 0.10
 
 
@@ -53,9 +60,9 @@ def _std(space, lower, upper, gate_std):
 
 
 def project_joint_row(row):
-    """Joint search vector: the design, then the three outbound gates.
+    """Joint search vector: the design, then the four outbound gates.
 
-    A saved row that still carries all seven spline gates is reduced. The
+    A saved row that still carries all nine spline gates is reduced. The
     center gate is dropped and the return half is not stored again.
     """
     values = np.asarray(row, dtype=float).reshape(-1)
@@ -452,9 +459,13 @@ def optimize_joint(
         _save_cache(cache, rows, quanta, totals, n_train, origin)
         print("saved {} joint designs".format(len(rows)), flush=True)
 
-    print("training on {} joint designs".format(len(rows)), flush=True)
+    kind = "stochastic" if quanta.shape[1] >= 2 else "deterministic"
+    print(
+        "training a {} network on {} joint designs".format(kind, len(rows)),
+        flush=True,
+    )
     predictor, _history = train_predictor(
-        rows, quanta, kind="stochastic", hidden=48, epochs=epochs, seed=seed,
+        rows, quanta, kind=kind, hidden=48, epochs=epochs, seed=seed,
         val_fraction=0.2, lbfgs_maxiter=lbfgs_maxiter, log_every=20, batch_size=64,
     )
     n_cem_each = max(int(n_simulate) // 2, 1)
@@ -543,7 +554,10 @@ def optimize_joint(
         "training set is the latin sample of junction, trajectory, and waveform",
         force_line(simulate_kwargs),
         stray_field_line(simulate_kwargs),
+        heating_line(simulate_kwargs),
         "start and end height: 50 um",
+        "bend-control heights: searched, within 15 um of 50 um",
+        "free waveform gates: {}".format(N_FREE_GATES),
         "training designs: {}".format(int(n_train)),
         "latin varied designs: {}".format(len(latin)),
         "junction unit std: {:.3f}".format(float(unit[:, :8].std())),

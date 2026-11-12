@@ -1,7 +1,7 @@
-"""Trajectory search over the bend radius and the ``(a, b)`` time profile.
+"""Trajectory search over the bend radius, control heights, and ``(a, b)``.
 
-The junction stays at the developed design. Height stays at 50 um. Time-gate
-offsets move with the path.
+The junction stays at the developed design. Each bend-control height stays
+within 15 um of 50 um. Time-gate offsets move with the path.
 """
 
 from pathlib import Path
@@ -77,7 +77,7 @@ def optimize_trajectory(
     offset_limit=0.10,
     simulate_kwargs=None,
 ):
-    """Search the bend radius and ``(a, b)``. Height stays at 50 um."""
+    """Search the bend radius, the control heights, and ``(a, b)``."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     simulate_kwargs = dict(simulate_kwargs or {})
@@ -92,7 +92,7 @@ def optimize_trajectory(
     saved = Path("outputs/schedule/schedule.npz")
     if saved.exists():
         loaded = np.asarray(np.load(saved)["best_offsets"], dtype=float).reshape(-1)
-        if loaded.size in (N_FREE_GATES, 7):
+        if loaded.size in (N_FREE_GATES, 2 * N_FREE_GATES + 1):
             best_gates = free_gate_offsets(loaded)
         else:
             best_gates = np.zeros(N_FREE_GATES)
