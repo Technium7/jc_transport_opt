@@ -1,0 +1,7 @@
+run,round,designs,best_total,source
+cem_10,nominal,1,8.21619,
+cem_10,latin,1501,0.0292688,train
+cem_10,1,1601,0.0102693,cem-elite
+cem_10,2,1701,0.00857961,cem-elite
+cem_10,3,1801,0.00857961,
+cem_10,4,1901,0.00857961,

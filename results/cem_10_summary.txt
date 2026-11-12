@@ -1,0 +1,28 @@
+training set is the latin sample of junction, trajectory, and waveform
+force: solved DC electrode voltages
+stray field: 10 V/m, 20 samples per design
+start and end height: 50 um
+training designs: 1501
+latin varied designs: 1499
+junction unit std: 0.286
+trajectory unit std: 0.284
+waveform unit std: 0.246
+nominal total quanta: 8.21619
+reference waveform quanta: 4.33729
+best latin total quanta: 0.0292688
+CEM rounds: 4
+CEM simulations: 400
+best CEM total quanta: 0.00857961
+active rounds: 0
+active simulations: 0
+best active total quanta: none
+designs simulated: 1901
+best additional total quanta: 0.00857961
+best additional quanta: 0.00645654 0.00147441 0.000183585 0.00145598 0.000505088 0.000109056 1.68263e-05 0.000154731 2.39288e-05 0.000134989 0.000545357 0.000277266 0.014155 0.000584752 0.00676562 0.00964653 0.00268051 0.000403451 0.00626037 0.00366846 0.00140604 0.0120204 0.0001634 0.000246115 0.000311675 5.27278e-06 0.000455684 0.0018035 0.000408993 0.000247495 0.00240805 0.00071124 9.91481e-05 0.00590779 0.000322731 2.97679e-05 0.0367765 0.00650153 0.00430121 0.00083732 0.000160104 0.000213198 7.67532e-05 0.000183483 0.00021428 0.0115864 0.00055314 0.000252191 0.00205639 0.000654921 0.000112389 0.0156528 0.000103302 4.29457e-06 6.40791e-05 0.000364278 0.000264062 0.00696959 0.000911607 0.000728606
+best total quanta, including the training set: 0.00857961
+plotted design origin: cem-elite
+junction shift from nominal, unit norm: 1.021
+trajectory shift from nominal, unit norm: 0.8059
+waveform shift from nominal, gate norm: 0.1105
+plotted bend radius s: 15.00 um
+plotted bend height: 50.00 to 50.00 um

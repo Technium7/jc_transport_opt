@@ -1,0 +1,107 @@
+{
+  "label": "cem_10",
+  "job": 410479,
+  "out": "outputs/cem_10",
+  "command": "ion_npe joint -o outputs/cem_10 --noise 10 -n 1500 --iterations 4 --active 0 --screen 2000 --simulate 100 --epochs 60 --lbfgs 25 --seed 0",
+  "force": "electrode_voltages",
+  "noise_std_Vm": 10.0,
+  "n_seeds": 20,
+  "designs": 1901,
+  "search_dim": 14,
+  "nominal_total": 8.216187107721696,
+  "reference_waveform_total": 4.337291340113941,
+  "best_latin_total": 0.029268844355872493,
+  "best_total": 0.008579605137055581,
+  "best_origin": "cem-elite",
+  "best_mode_quanta": [
+    0.006729871027421839,
+    0.0010328650509040696,
+    0.00081686905872967
+  ],
+  "best_total_std": 0.01103253231176162,
+  "rounds": [
+    {
+      "round": "nominal",
+      "designs": 1,
+      "best_total": 8.216187107721696,
+      "source": null
+    },
+    {
+      "round": "latin",
+      "designs": 1501,
+      "best_total": 0.029268844355872493,
+      "source": "train"
+    },
+    {
+      "round": 1,
+      "designs": 1601,
+      "best_total": 0.010269310346001224,
+      "source": "cem-elite"
+    },
+    {
+      "round": 2,
+      "designs": 1701,
+      "best_total": 0.008579605137055581,
+      "source": "cem-elite"
+    },
+    {
+      "round": 3,
+      "designs": 1801,
+      "best_total": 0.008579605137055581,
+      "source": null
+    },
+    {
+      "round": 4,
+      "designs": 1901,
+      "best_total": 0.008579605137055581,
+      "source": null
+    }
+  ],
+  "training_nll": {
+    "epoch_59_train": 0.734,
+    "epoch_59_val": 1.233,
+    "lbfgs_after_latin": [
+      0.7722,
+      0.7722
+    ],
+    "lbfgs_after_rounds": [
+      [
+        0.7375,
+        0.6051
+      ],
+      [
+        0.6783,
+        0.5742
+      ],
+      [
+        0.6188,
+        0.5329
+      ],
+      [
+        0.6151,
+        0.5236
+      ]
+    ]
+  },
+  "best_design": {
+    "ai": 0.35,
+    "da": 1.6111983500775002,
+    "bi_x": 0.9581989640586204,
+    "bi_y": 0.1873114397518636,
+    "bo_x": 2.473778482295032,
+    "bo_y": 0.2070847757261577,
+    "ci_l": 1.0023964321523469,
+    "co_l": 5.339257508031916,
+    "cross_s": 0.3,
+    "curve_a": 4.260267862220019,
+    "curve_b": 0.740446541187755,
+    "g0": -0.04879482776680408,
+    "g1": 0.09116855704681223,
+    "g2": 0.038934306341340194
+  },
+  "junction_shift_unit": 1.0208270258789784,
+  "trajectory_shift_unit": 0.8059418290311923,
+  "waveform_shift": 0.11049217719400434,
+  "bend_radius_um": 15.0,
+  "height_um": 50.0
+}
