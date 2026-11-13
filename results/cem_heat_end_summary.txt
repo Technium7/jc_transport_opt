@@ -1,0 +1,31 @@
+training set is the latin sample of junction, trajectory, and waveform
+force: solved DC electrode voltages
+stray field: off
+anomalous heating: accumulated each step and added to the final quanta, 300/s at 1.5 MHz, omega^-2
+start and end height: 50 um
+bend-control heights: searched, within 15 um of 50 um
+free waveform gates: 4
+training designs: 3001
+latin varied designs: 2999
+junction unit std: 0.287
+trajectory unit std: 0.290
+waveform unit std: 0.237
+nominal total quanta: 7.52281
+reference waveform quanta: 2.02155e+11
+best latin total quanta: 2.24116
+CEM rounds: 4
+CEM simulations: 400
+best CEM total quanta: 0.113563
+active rounds: 0
+active simulations: 0
+best active total quanta: none
+designs simulated: 3401
+best additional total quanta: 0.113563
+best additional quanta: 0.0987917 0.00836931 0.00640235
+best total quanta, including the training set: 0.113563
+plotted design origin: cem-elite
+junction shift from nominal, unit norm: 0.8892
+trajectory shift from nominal, unit norm: 0.454
+waveform shift from nominal, gate norm: 0.1458
+plotted bend radius s: 0.00 um
+plotted bend height: 46.41 to 55.00 um

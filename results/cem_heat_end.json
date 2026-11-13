@@ -1,0 +1,89 @@
+{
+  "label": "cem_heat_end",
+  "job": 457681,
+  "out": "outputs/cem_heat_end",
+  "command": "ion_npe joint --noise 0 -n 3000 --iterations 4 --active 0 --screen 2000 --simulate 100 --epochs 60 --lbfgs 25 --seed 0 --heating end -o outputs/cem_heat_end",
+  "force": "electrode_voltages",
+  "noise_std_Vm": 0.0,
+  "heating": "end",
+  "n_seeds": 1,
+  "designs": 3401,
+  "search_dim": 22,
+  "nominal_total": 7.522808013706038,
+  "best_latin_total": 2.2411625952713,
+  "best_total": 0.11356331966030093,
+  "best_origin": "cem-elite",
+  "best_mode_quanta": [
+    0.09879165957082486,
+    0.008369312052940992,
+    0.006402348036535088
+  ],
+  "rounds": [
+    {
+      "round": "nominal",
+      "designs": 1,
+      "best_total": 7.522808013706038,
+      "source": null
+    },
+    {
+      "round": "latin",
+      "designs": 3001,
+      "best_total": 2.2411625952713,
+      "source": "train"
+    },
+    {
+      "round": 1,
+      "designs": 3101,
+      "best_total": 0.3971217282552338,
+      "source": "cem-best"
+    },
+    {
+      "round": 2,
+      "designs": 3201,
+      "best_total": 0.3971217282552338,
+      "source": null
+    },
+    {
+      "round": 3,
+      "designs": 3301,
+      "best_total": 0.3971217282552338,
+      "source": null
+    },
+    {
+      "round": 4,
+      "designs": 3401,
+      "best_total": 0.11356331966030093,
+      "source": "cem-elite"
+    }
+  ],
+  "best_design": {
+    "ai": 0.25597382875656344,
+    "da": 1.7583087318387052,
+    "bi_x": 0.6483597467902097,
+    "bi_y": 0.05772960641248286,
+    "bo_x": 2.541595593562992,
+    "bo_y": 0.08043531996793783,
+    "ci_l": 1.2602005914505994,
+    "co_l": 3.5,
+    "cross_s": 0.0,
+    "c0_z": 0.9560963452810495,
+    "c1_z": 1.1000533865568132,
+    "c2_z": 1.051990026715202,
+    "c3_z": 0.9513674607751246,
+    "c4_z": 0.9282475504482511,
+    "c5_z": 0.9864350003367078,
+    "c6_z": 0.9930418922823059,
+    "curve_a": 2.9947176182186057,
+    "curve_b": 1.1016782239814542,
+    "g0": 0.013180179484188731,
+    "g1": 0.07879954536736315,
+    "g2": 0.1,
+    "g3": 0.06985637717850735
+  },
+  "bend_radius_um": 0.0,
+  "bend_height_um": [
+    46.412377522412555,
+    55.00266932784066
+  ],
+  "junction_shift_unit": 0.8892310015656824
+}

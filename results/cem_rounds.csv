@@ -5,3 +5,15 @@ cem_10,1,1601,0.0102693,cem-elite
 cem_10,2,1701,0.00857961,cem-elite
 cem_10,3,1801,0.00857961,
 cem_10,4,1901,0.00857961,
+cem_heat_velocity,nominal,1,7.3034,
+cem_heat_velocity,latin,3001,2.18194,train
+cem_heat_velocity,1,3101,0.371219,cem-best
+cem_heat_velocity,2,3201,0.141374,cem-best
+cem_heat_velocity,3,3301,0.141374,
+cem_heat_velocity,4,3401,0.141374,
+cem_heat_end,nominal,1,7.52281,
+cem_heat_end,latin,3001,2.24116,train
+cem_heat_end,1,3101,0.397122,cem-best
+cem_heat_end,2,3201,0.397122,
+cem_heat_end,3,3301,0.397122,
+cem_heat_end,4,3401,0.113563,cem-elite
