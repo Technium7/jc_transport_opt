@@ -35,7 +35,11 @@ class LocalNeighborhoodTests(unittest.TestCase):
         group = blocks(len(center))
         self.assertEqual(
             [space.names[i] for i in group["trajectory"]],
-            ["cross_s", "c0_z", "c1_z", "c2_z", "c3_z", "c4_z", "c5_z", "c6_z", "curve_a", "curve_b"],
+            [
+                "cross_s", "z_arm", "a0_z", "a1_z", "a2_z", "a3_z", "z_bend",
+                "c0_z", "c1_z", "c2_z", "c3_z", "c4_z", "c5_z", "c6_z",
+                "curve_a", "curve_b",
+            ],
         )
         self.assertTrue(any(name.endswith("_z") for name in space.names))
         half = neighborhood_half(space, lower, upper)

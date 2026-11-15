@@ -55,8 +55,8 @@ def _add_physics(parser):
     parser.add_argument(
         "--heating",
         choices=("off", "velocity", "end"),
-        default="off",
-        help="anomalous heating: off, kick each mode velocity every step, or add the accumulated quanta at the end",
+        default="end",
+        help="anomalous heating: add the accumulated quanta at the end (default), kick each mode velocity every step, or off",
     )
 
 
@@ -92,7 +92,7 @@ def _cmd_simulate(args):
         result.duration_s * 1e6,
         result.n_hold * SIM_DT * 1e9,
     ))
-    print("start and end height fixed at 50 um")
+    print("start and end height {:.2f} um".format(design.z_arm * L_SCALE * 1e6))
     print("bend entrance {:.2f} um, crossing height {:.2f} um".format(
         design.z_bend * L_SCALE * 1e6, design.z_cross * L_SCALE * 1e6
     ))
@@ -234,6 +234,7 @@ def _cmd_joint(args):
         epochs=args.epochs,
         lbfgs_maxiter=args.lbfgs,
         seed=args.seed,
+        latin_scale=args.latin_scale,
         simulate_kwargs=_physics(args),
     )
 
@@ -367,7 +368,7 @@ def main(argv=None):
 
     traj = sub.add_parser(
         "trajectory",
-        help="search bend radius, height, and (a, b), with the ion starting and ending at 50 um",
+        help="search bend radius and height from the start of the transport, and (a, b)",
     )
     _add_physics(traj)
     traj.add_argument("-o", "--out", type=str, default="outputs/trajectory")
@@ -384,11 +385,17 @@ def main(argv=None):
     )
     _add_physics(joint)
     joint.add_argument("-o", "--out", type=str, default="outputs/joint")
-    joint.add_argument("-n", type=int, default=5000, help="space-filling training designs that vary the junction, the trajectory, and the waveform")
+    joint.add_argument("-n", type=int, default=5000, help="training designs drawn near the nominal junction, trajectory, and waveform")
     joint.add_argument("--iterations", type=int, default=6, help="cross-entropy rounds; each round adds simulations")
     joint.add_argument("--active", type=int, default=4, help="active-learning rounds after the cross-entropy rounds")
     joint.add_argument("--screen", type=int, default=256, help="candidate designs scored by the network each round")
     joint.add_argument("--simulate", type=int, default=8, help="new dynamics simulations each round")
+    joint.add_argument(
+        "--latin-scale",
+        type=float,
+        default=1.0,
+        help="scale the first Latin neighborhood around the nominal path; 1 is the nearby-search box",
+    )
     joint.add_argument("--epochs", type=int, default=40)
     joint.add_argument("--lbfgs", type=int, default=20)
     joint.add_argument("--seed", type=int, default=0)

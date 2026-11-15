@@ -39,7 +39,24 @@ class DesignTests(unittest.TestCase):
         self.assertNotIn("c0_r", space.names)
         self.assertNotIn("a0_x", space.names)
         self.assertEqual(design.z_arm, 1.0)
+        self.assertEqual(design.z_bend, 1.0)
         self.assertEqual(design.z_cross, 1.0)
+        self.assertIn("z_arm", space.names)
+        self.assertIn("a0_z", space.names)
+        self.assertIn("z_bend", space.names)
+        moved = vector.copy()
+        moved[space.names.index("z_arm")] = 0.8
+        moved[space.names.index("a0_z")] = 1.2
+        moved[space.names.index("z_bend")] = 0.9
+        raised = space.unpack(moved)
+        self.assertAlmostEqual(raised.z_arm, 0.8)
+        self.assertAlmostEqual(raised.arm_xyz[0, 2], 1.2)
+        np.testing.assert_allclose(raised.arm_xyz[:, :2], design.arm_xyz[:, :2])
+        self.assertAlmostEqual(raised.z_bend, 0.9)
+        from ion_npe.trajectory import path_geometry
+        path = path_geometry(raised, n=5)
+        self.assertAlmostEqual(path[0, 2], 0.8)
+        self.assertAlmostEqual(path[-1, 2], 0.8)
         self.assertEqual(len(design.interior_z), 7)
         self.assertEqual(N_INTERIOR, 7)
         spacing = np.diff(design.interior_xyz[:, 0])

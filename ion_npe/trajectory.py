@@ -1,9 +1,9 @@
 """Three-dimensional transport path and the time law that moves along it.
 
 The ion starts at ``(x_start, 0, z_arm)`` and ends at the reflection of that
-point, at the same height. Both endpoints are 50 um. The arm stays on the
-developed path. The bend radius ``cross_s`` fixes the bend ``(x, y)``. Height
-is the free bend control. ``z`` is taken from the design. It is not solved
+point, at the same height. ``z_arm`` and the arm-control heights are searched.
+The arm ``(x, y)`` stays on the developed path. The bend radius ``cross_s``
+fixes the bend ``(x, y)``. ``z`` is taken from the design. It is not solved
 from a height model.
 """
 
@@ -191,9 +191,10 @@ def _require_design(design):
 def arm_polygon(design):
     """Clamped controls of the inbound arm.
 
-    The path leaves the start at 50 um, tangent to the arm. It arrives at the
-    bend entrance at ``z_bend``, with a flat vertical tangent. The arm
-    controls stay on the developed RF-null path.
+    The path leaves the start at ``z_arm``, tangent to the arm, and the end of
+    the round trip returns to that same height. It arrives at the bend
+    entrance at ``z_bend``, with a flat vertical tangent. The arm controls
+    keep the developed ``(x, y)`` and use the searched heights.
     """
     _require_design(design)
     start = np.array([design.x_start, 0.0, design.z_arm])

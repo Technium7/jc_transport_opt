@@ -1,10 +1,13 @@
 """One search over the junction, the trajectory, and the waveform.
 
-The space-filling sample trains the network. Cross-entropy rounds then
-simulate the designs that network ranks as coldest. Bend-control heights stay
-within 15 um of 50 um. The free trajectory coordinates are the bend radius,
-those heights, and ``(a, b)``. The waveform coordinates are the four outbound
-gates. The center gate stays at 0, and the return half is their mirror.
+The first Latin sample trains the network. It is drawn in a box around the
+nominal path, not over the full legal range, so stray-field runs still see
+usable heating. Cross-entropy rounds then simulate the designs the network
+ranks as coldest. Height from the start through the bend stays within
+15 um of 50 um. The free trajectory coordinates are the bend radius, the
+start and arm heights, the bend heights, and ``(a, b)``.
+The waveform coordinates are the four outbound gates. The center gate stays
+at 0, and the return half is their mirror.
 """
 
 from pathlib import Path
@@ -43,6 +46,41 @@ def _bounds(space):
     return lower, upper
 
 
+def _latin_half(space, lower, upper):
+    """Half-width of the first Latin sample around the nominal path.
+
+    Junction moves stay within 20% of their full span, bend radius and height
+    within 40%, ``(a, b)`` within 30%, and each free gate within 0.08 of the
+    path. That matches the nearby-search neighborhood and keeps most draws
+    near the developed design.
+    """
+    span = upper - lower
+    names = list(space.names) + ["g{}".format(i) for i in range(N_FREE_GATES)]
+    half = np.empty(len(names))
+    for index, name in enumerate(names):
+        if name.startswith("g"):
+            half[index] = 0.08
+        elif name == "cross_s" or name.endswith("_z") or name.startswith("z_"):
+            half[index] = 0.40 * span[index]
+        elif name in ("curve_a", "curve_b"):
+            half[index] = 0.30 * span[index]
+        else:
+            half[index] = 0.20 * span[index]
+    return half
+
+
+def _latin_bounds(space, lower, upper, center=None, scale=1.0):
+    """Clip a neighborhood of ``center`` to the legal joint box."""
+    if center is None:
+        center = np.concatenate([space.nominal(), np.zeros(N_FREE_GATES)])
+    center = np.asarray(center, dtype=float).reshape(-1)
+    half = float(scale) * _latin_half(space, lower, upper)
+    lo = np.maximum(center - half, lower)
+    hi = np.minimum(center + half, upper)
+    hi = np.maximum(hi, lo + 1e-8)
+    return lo, hi
+
+
 def _std(space, lower, upper, gate_std):
     span = upper - lower
     names = list(space.names) + ["g{}".format(i) for i in range(N_FREE_GATES)]
@@ -50,7 +88,7 @@ def _std(space, lower, upper, gate_std):
     for index, name in enumerate(names):
         if name.startswith("g"):
             std[index] = gate_std
-        elif name == "cross_s" or name.endswith("_z"):
+        elif name == "cross_s" or name.endswith("_z") or name.startswith("z_"):
             std[index] = 0.22 * span[index]
         elif name in ("curve_a", "curve_b"):
             std[index] = 0.12 * span[index]
@@ -146,18 +184,31 @@ def _extend_joint(rows, quanta, totals, prepared, packed, limit, label, log_ever
         totals.append(heating)
         if log_every <= 1 or len(rows) == 1 or len(rows) % int(log_every) == 0 or len(rows) == int(limit):
             print(
-                "  {} {:4d}/{}  heating {:.4g}".format(label, len(rows), int(limit), heating),
+                "  {} {:4d}/{}  this design {:.4g}  best so far {:.4g}".format(
+                    label, len(rows), int(limit), heating, min(totals),
+                ),
                 flush=True,
             )
     return rows, quanta, totals
 
 
-def _collect_latin(rng, n, lower, upper, space, simulate_kwargs):
-    """Space-filling joint designs. Each draw moves the junction, the path, and the gates."""
+def _collect_latin(rng, n, lower, upper, space, simulate_kwargs, sample_lower=None, sample_upper=None):
+    """Space-filling joint designs near the nominal path.
+
+    ``sample_lower`` and ``sample_upper`` set the Latin box. They default to
+    the full legal range. The neighborhood used by ``optimize_joint`` is much
+    smaller, so the training set stays near the developed design.
+    """
     from scipy.stats.qmc import LatinHypercube
 
     from .farm import get_farm, width_for
 
+    if sample_lower is None:
+        sample_lower = lower
+    if sample_upper is None:
+        sample_upper = upper
+    sample_lower = np.asarray(sample_lower, dtype=float)
+    sample_upper = np.asarray(sample_upper, dtype=float)
     farm = get_farm()
     rows = []
     quanta = []
@@ -166,8 +217,8 @@ def _collect_latin(rng, n, lower, upper, space, simulate_kwargs):
     while len(rows) < int(n):
         if not queue:
             batch_n = max((int(n) - len(rows)) * 2, 64)
-            unit = LatinHypercube(d=len(lower), seed=rng).random(batch_n)
-            batch = lower + unit * (upper - lower)
+            unit = LatinHypercube(d=len(sample_lower), seed=rng).random(batch_n)
+            batch = sample_lower + unit * (sample_upper - sample_lower)
             for row in batch:
                 prepared = project_joint_row(row)
                 if _admissible(_unpack(space, prepared)):
@@ -384,17 +435,19 @@ def optimize_joint(
     epochs=40,
     lbfgs_maxiter=20,
     seed=0,
+    latin_scale=1.0,
     simulate_kwargs=None,
 ):
     """Train on the joint sample, then add CEM and active-learning simulations.
 
-    The Latin hypercube is the training set. It is resimulated only when a
-    saved sample of at least ``n`` designs is not already on disk. Each CEM
-    round draws an elite cloud and a neighborhood of the best design, both of
-    which move the junction, the path, and the gates, and integrates the
-    designs the network ranks lowest in each cloud. Each active round screens
-    a fresh space-filling pool and integrates the low-heating, high-uncertainty
-    designs.
+    The Latin hypercube is the training set. It is drawn in a neighborhood of
+    the nominal path (see ``_latin_bounds``); ``latin_scale`` multiplies that
+    box. It is resimulated only when a saved sample of at least ``n`` designs
+    is not already on disk. Each CEM round draws an elite cloud and a
+    neighborhood of the best design, both of which move the junction, the
+    path, and the gates, and integrates the designs the network ranks lowest
+    in each cloud. Each active round screens a fresh space-filling pool and
+    integrates the low-heating, high-uncertainty designs.
     """
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -402,6 +455,9 @@ def optimize_joint(
     space = DesignSpace()
     lower, upper = _bounds(space)
     nominal = np.concatenate([space.nominal(), np.zeros(N_FREE_GATES)])
+    sample_lower, sample_upper = _latin_bounds(
+        space, lower, upper, center=nominal, scale=latin_scale,
+    )
     cache = out / "joint.npz"
     rng = np.random.default_rng(seed)
     local_std = _std(space, lower, upper, 0.03)
@@ -442,11 +498,13 @@ def optimize_joint(
                 total_parts.append(float(total_heating(wave_result.quanta)))
                 print("  heating {:.4g}".format(total_parts[-1]), flush=True)
         print(
-            "latin sample of {} designs over the junction, the trajectory, and the waveform".format(int(n)),
+            "latin sample of {} designs near the nominal junction, trajectory, and waveform "
+            "(scale {:.2f})".format(int(n), float(latin_scale)),
             flush=True,
         )
         drawn, drawn_q, drawn_total = _collect_latin(
-            rng, int(n), lower, upper, space, simulate_kwargs
+            rng, int(n), lower, upper, space, simulate_kwargs,
+            sample_lower=sample_lower, sample_upper=sample_upper,
         )
         pieces.append(drawn)
         quanta_parts.append(drawn_q)
@@ -551,13 +609,14 @@ def optimize_joint(
         return float(np.min(totals[indices]))
 
     lines = [
-        "training set is the latin sample of junction, trajectory, and waveform",
+        "training set is a latin sample near the nominal junction, trajectory, and waveform",
         force_line(simulate_kwargs),
         stray_field_line(simulate_kwargs),
         heating_line(simulate_kwargs),
-        "start and end height: 50 um",
-        "bend-control heights: searched, within 15 um of 50 um",
+        "start and end height: searched together, within 15 um of 50 um",
+        "arm and bend heights: searched, within 15 um of 50 um",
         "free waveform gates: {}".format(N_FREE_GATES),
+        "latin neighborhood scale: {:.2f}".format(float(latin_scale)),
         "training designs: {}".format(int(n_train)),
         "latin varied designs: {}".format(len(latin)),
         "junction unit std: {:.3f}".format(float(unit[:, :8].std())),
@@ -590,6 +649,11 @@ def optimize_joint(
         "trajectory shift from nominal, unit norm: {:.4g}".format(path_shift),
         "waveform shift from nominal, gate norm: {:.4g}".format(gate_shift),
         "plotted bend radius s: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
+        "plotted start and end height: {:.2f} um".format(design.z_arm * L_SCALE * 1e6),
+        "plotted arm height: {:.2f} to {:.2f} um".format(
+            design.arm_xyz[:, 2].min() * L_SCALE * 1e6,
+            design.arm_xyz[:, 2].max() * L_SCALE * 1e6,
+        ),
         "plotted bend height: {:.2f} to {:.2f} um".format(
             design.interior_z.min() * L_SCALE * 1e6,
             design.interior_z.max() * L_SCALE * 1e6,

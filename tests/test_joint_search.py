@@ -5,7 +5,9 @@ import unittest
 import numpy as np
 
 from ion_npe.design import DesignSpace, expand_free_gates
-from ion_npe.joint import N_FREE_GATES, N_GATES, _bounds, _pick_lowest, _unpack, project_joint_row
+from ion_npe.joint import (
+    N_FREE_GATES, N_GATES, _bounds, _latin_bounds, _pick_lowest, _unpack, project_joint_row,
+)
 
 
 class JointSearchTests(unittest.TestCase):
@@ -38,6 +40,25 @@ class JointSearchTests(unittest.TestCase):
         np.testing.assert_allclose(row[-N_FREE_GATES:], [0.04, -0.01, 0.02, 0.01])
         design = _unpack(space, row)
         self.assertEqual(float(design.gate_offsets[4]), 0.0)
+
+    def test_latin_box_is_a_neighborhood_of_the_nominal_path(self):
+        space = DesignSpace()
+        lower, upper = _bounds(space)
+        nominal = np.concatenate([space.nominal(), np.zeros(N_FREE_GATES)])
+        lo, hi = _latin_bounds(space, lower, upper, center=nominal, scale=1.0)
+        self.assertTrue(np.all(lo >= lower - 1e-12))
+        self.assertTrue(np.all(hi <= upper + 1e-12))
+        self.assertTrue(np.all(lo < hi))
+        self.assertTrue(np.all(lo <= nominal))
+        self.assertTrue(np.all(nominal <= hi))
+        # Junction span is 20% of the full box; the first coordinate is ai.
+        self.assertAlmostEqual(float(hi[0] - lo[0]), 0.40 * float(upper[0] - lower[0]))
+        # Free gates stay within 0.08 of the path.
+        self.assertAlmostEqual(float(hi[-1] - lo[-1]), 0.16)
+        # A larger scale still cannot leave the legal box.
+        wide_lo, wide_hi = _latin_bounds(space, lower, upper, center=nominal, scale=10.0)
+        np.testing.assert_allclose(wide_lo, lower)
+        np.testing.assert_allclose(wide_hi, upper)
 
 
 if __name__ == "__main__":

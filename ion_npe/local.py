@@ -43,8 +43,8 @@ def blocks(dim):
 def neighborhood_half(space, lower, upper):
     """Half-width of the box around the nominal path.
 
-    Gates cover the shifts that change the time law. Bend radius and ``(a, b)``
-    stay in a fraction of their allowed range. Height is not a search coordinate.
+    Gates cover the shifts that change the time law. Bend radius, height, and
+    ``(a, b)`` stay in a fraction of their allowed range.
     """
     span = upper - lower
     names = list(space.names) + ["g{}".format(i) for i in range(N_FREE_GATES)]
@@ -52,7 +52,7 @@ def neighborhood_half(space, lower, upper):
     for index, name in enumerate(names):
         if name.startswith("g"):
             half[index] = 0.08
-        elif name == "cross_s" or name.endswith("_z"):
+        elif name == "cross_s" or name.endswith("_z") or name.startswith("z_"):
             half[index] = 0.40 * span[index]
         elif name in ("curve_a", "curve_b"):
             half[index] = 0.30 * span[index]
@@ -496,7 +496,7 @@ def optimize_local(
         if cooptimize else "local search starting at the nominal path",
         force_line(simulate_kwargs),
         stray_field_line(simulate_kwargs),
-        "start and end height: 50 um",
+        "start and end height: searched together, within 15 um of 50 um",
         "designs simulated: {}".format(len(totals)),
         "waveform samples: {}".format(wave_n),
         "junction samples: {}".format(junc_n),
@@ -531,6 +531,7 @@ def optimize_local(
         "trajectory shift from nominal, unit norm: {:.4g}".format(path_shift),
         "waveform shift from nominal, gate norm: {:.4g}".format(gate_shift),
         "best bend radius s: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
+        "best start and end height: {:.2f} um".format(design.z_arm * L_SCALE * 1e6),
         "best bend height: {:.2f} to {:.2f} um".format(
             design.interior_z.min() * L_SCALE * 1e6,
             design.interior_z.max() * L_SCALE * 1e6,

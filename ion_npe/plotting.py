@@ -16,6 +16,7 @@ from .trajectory import (
     arm_polygon,
     control_polygon,
     dynamics_grid,
+    make_inbound,
     one_sided_time_gates,
     path_geometry,
 )
@@ -155,8 +156,8 @@ def plot_trajectory(design, path, out):
     The electrode fill is the same ``build_junction`` system used to compute
     the DC/RF response function. Squares are the clamped ends of the bend.
     Triangles are the fixed arm controls and circles are the bend controls.
-    Bend controls are RF-null radius and height. The ion still starts and
-    ends at 50 um. Orange diamonds name the eight junction controls on the
+    Bend controls are RF-null radius and height. The start and the end share
+    ``z_arm``. Orange diamonds name the eight junction controls on the
     rail that bulges toward +x.
     """
     from .junction import build_junction
@@ -259,18 +260,11 @@ def plot_trajectory(design, path, out):
     distance = np.concatenate([[0.0], np.cumsum(step)])
     axes[1].plot(distance, height_um, color="#4C78A8", label="path")
     axes[1].axhline(ION_HEIGHT_M * 1e6, color="#333333", lw=0.7, ls=":", label="50 μm")
-    for index, point in enumerate(controls):
-        nearest = int(np.argmin((path[:, 0] - point[0]) ** 2 + (path[:, 1] - point[1]) ** 2))
-        marker = "o" if 2 <= index < len(controls) - 2 else "s"
-        color = "#E45756" if marker == "o" else "#333333"
-        axes[1].scatter(
-            distance[nearest], point[2] * L_SCALE * 1e6,
-            s=36, marker=marker, color=color, zorder=3,
-        )
+    _draw_height_controls(axes[1], design, scale=1.0)
     axes[1].set_xlabel("distance along the path (trap heights)")
     axes[1].set_ylabel("z (μm)")
     axes[1].set_title("height and control points")
-    axes[1].legend(frameon=False, fontsize=8)
+    axes[1].legend(frameon=False, fontsize=7, ncol=2)
     fig.tight_layout()
     fig.savefig(out, dpi=140)
     plt.close(fig)
@@ -308,6 +302,92 @@ def _height_profile(design):
     step = np.linalg.norm(np.diff(path, axis=0), axis=1)
     distance_um = np.concatenate([[0.0], np.cumsum(step)]) * L_SCALE * 1e6
     return distance_um, path[:, 2] * L_SCALE * 1e6
+
+
+def _height_control_points(design):
+    """Arc length of each z control, on the way in and on the way back.
+
+    Distances are dimensionless trap heights. Heights are micrometres. The
+    start is repeated at the end of the round trip. The crossing is drawn once.
+    """
+    arm = arm_polygon(design)
+    bend = control_polygon(design)
+    inbound, _ctrl = make_inbound(design)
+    samples = np.linspace(0.0, inbound.length, 900)
+    pts = inbound.points(samples)
+
+    def along(point):
+        delta = pts[:, :2] - np.asarray(point[:2], dtype=float)
+        return float(samples[int(np.argmin(np.einsum("ij,ij->i", delta, delta)))])
+
+    total = 2.0 * inbound.length
+    groups = {
+        "start": [arm[0]],
+        "arm": list(arm[2:-2]),
+        "end": list(bend[:2]) + list(bend[-2:-1]),
+        "bend": list(bend[2:-2]),
+        "cross": [bend[-1]],
+    }
+    placed = {}
+    for kind, points in groups.items():
+        distance = []
+        height = []
+        labels = []
+        for index, point in enumerate(points):
+            z_um = float(point[2]) * L_SCALE * 1e6
+            if kind == "start":
+                distance.extend([0.0, total])
+                height.extend([z_um, z_um])
+                labels.extend(["start", "end"])
+            elif kind == "cross":
+                distance.append(inbound.length)
+                height.append(z_um)
+                labels.append("cross")
+            else:
+                station = along(point)
+                distance.extend([station, total - station])
+                height.extend([z_um, z_um])
+                if kind == "arm":
+                    labels.extend(["a{}".format(index), ""])
+                elif kind == "bend":
+                    labels.extend(["c{}".format(index), ""])
+                else:
+                    labels.extend(["", ""])
+        placed[kind] = (
+            np.asarray(distance, dtype=float),
+            np.asarray(height, dtype=float),
+            labels,
+        )
+    return placed
+
+
+def _draw_height_controls(ax, design, scale):
+    """Mark z controls on a height-versus-distance axis.
+
+    ``scale`` converts a dimensionless arc length to the axis unit.
+    """
+    marks = (
+        ("start", "D", "#333333", "start and end"),
+        ("arm", "^", "#54A24B", "arm controls"),
+        ("end", "s", "#333333", "bend ends"),
+        ("bend", "o", "#E45756", "bend controls"),
+        ("cross", "P", "#B279A2", "crossing"),
+    )
+    placed = _height_control_points(design)
+    for kind, marker, color, label in marks:
+        distance, height, labels = placed[kind]
+        ax.scatter(
+            distance * scale, height, s=28, marker=marker, color=color,
+            zorder=4, label=label,
+        )
+        for station, z_um, text in zip(distance, height, labels):
+            if not text or text in ("start", "end", "cross"):
+                continue
+            ax.annotate(
+                text, (station * scale, z_um),
+                textcoords="offset points", xytext=(0, 5),
+                ha="center", fontsize=6, color=color,
+            )
 
 
 def plot_best_design(design, out, reference=None, total_quanta=None, title=None):
@@ -436,11 +516,16 @@ def plot_best_design(design, out, reference=None, total_quanta=None, title=None)
         ref_height_distance, ref_height = _height_profile(reference)
         height.plot(ref_height_distance, ref_height, color="#9a9a9a", ls="--", lw=1.2, label="nominal")
     height.plot(opt_distance, opt_height, color="#4C78A8", lw=1.6, label="optimized")
+    height.axhline(ION_HEIGHT_M * 1e6, color="#333333", lw=0.7, ls=":", label="50 μm")
+    _draw_height_controls(height, design, scale=L_SCALE * 1e6)
     height.set_xlabel("distance along the path (μm)")
     height.set_ylabel("height (μm)")
-    height.set_title("height through transport")
+    height.set_title("height and control points")
     height.set_xlim(0.0, opt_distance[-1])
-    height.legend(frameon=False, fontsize=8)
+    height.legend(
+        frameon=False, fontsize=7, ncol=4,
+        loc="upper center", bbox_to_anchor=(0.5, -0.32),
+    )
     fig.savefig(out, dpi=140)
     plt.close(fig)
 

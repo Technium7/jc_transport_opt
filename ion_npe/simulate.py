@@ -71,7 +71,7 @@ def simulation_settings(simulate_kwargs=None):
     kwargs = dict(simulate_kwargs or {})
     kwargs.setdefault("force", FORCE_ELECTRODE_VOLTAGES)
     kwargs.setdefault("noise_std_Vm", NOISE_STD_VM)
-    kwargs.setdefault("heating", "off")
+    kwargs.setdefault("heating", "end")
     if kwargs["heating"] not in ("off", "velocity", "end"):
         raise ValueError(
             "heating must be 'off', 'velocity', or 'end'; got {!r}".format(kwargs["heating"])
@@ -124,7 +124,7 @@ def stray_field_line(simulate_kwargs):
 
 def heating_line(simulate_kwargs):
     """One summary line for anomalous heating."""
-    mode = simulate_kwargs.get("heating", "off")
+    mode = simulate_kwargs.get("heating", "end")
     if mode == "velocity":
         return "anomalous heating: added to each mode velocity at every step, 300/s at 1.5 MHz, omega^-2"
     if mode == "end":
@@ -142,15 +142,16 @@ def simulate_design(
     with_ideal=False,
     sim_dt=SIM_DT,
     n_geom=120,
-    heating="off",
+    heating="end",
 ):
     """Final motional quanta for ``design``.
 
     ``seeds`` each draw an independent stray field. With ``noise_std_Vm`` 0
     the field is omitted and one trajectory is integrated. The default force
     is the electrode field of the solved DC voltages on the segmented
-    junction. ``with_ideal`` also integrates the harmonic well that follows
-    the path at every step, only as a comparison.
+    junction. The default heating accumulates the omega^{-2} quanta and adds
+    them at the end of the transport. ``with_ideal`` also integrates the
+    harmonic well that follows the path at every step, only as a comparison.
     """
     try:
         if heating not in ("off", "velocity", "end"):

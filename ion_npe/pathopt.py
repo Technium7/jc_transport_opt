@@ -1,7 +1,8 @@
-"""Trajectory search over the bend radius, control heights, and ``(a, b)``.
+"""Trajectory search over the bend radius, the path height, and ``(a, b)``.
 
-The junction stays at the developed design. Each bend-control height stays
-within 15 um of 50 um. Time-gate offsets move with the path.
+The junction stays at the developed design. Height from the start through the
+bend stays within 15 um of 50 um. The end uses the start height. Time-gate
+offsets move with the path.
 """
 
 from pathlib import Path
@@ -18,7 +19,8 @@ from .train import train_predictor
 def _parts(space):
     names = space.names[8:]
     free_columns = np.array([
-        name in ("cross_s", "curve_a", "curve_b") for name in names
+        name in ("cross_s", "curve_a", "curve_b") or name.endswith("_z") or name.startswith("z_")
+        for name in names
     ])
     return names, free_columns
 
@@ -218,13 +220,14 @@ def optimize_trajectory(
     )
     lines = [
         "junction fixed at the developed design",
-        "start and end height: 50 um",
+        "start and end height: searched together, within 15 um of 50 um",
         "trajectories simulated: {}".format(len(totals)),
         "nominal total quanta: {:.6g}".format(float(totals[0])),
         "best total quanta: {:.6g}".format(float(totals[best_i])),
         "best quanta: {}".format(
             " ".join("{:.6g}".format(float(v)) for v in quanta[best_i].reshape(-1))
         ),
+        "best start and end height: {:.2f} um".format(design.z_arm * 50.0),
         "best bend entrance: {:.2f} um".format(design.z_bend * 50.0),
         "best crossing height: {:.2f} um".format(design.z_cross * 50.0),
         "best bend radius s: {:.2f} um".format(design.cross_s * 50.0),
