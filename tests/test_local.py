@@ -36,8 +36,8 @@ class LocalNeighborhoodTests(unittest.TestCase):
         self.assertEqual(
             [space.names[i] for i in group["trajectory"]],
             [
-                "cross_s", "z_arm", "a0_z", "a1_z", "a2_z", "a3_z", "z_bend",
-                "c0_z", "c1_z", "c2_z", "c3_z", "c4_z", "c5_z", "c6_z",
+                "cross_s",
+                "h0_z", "h1_z", "h2_z", "h3_z", "h4_z", "h5_z", "h6_z",
                 "curve_a", "curve_b",
             ],
         )

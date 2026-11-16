@@ -6,7 +6,8 @@ import numpy as np
 
 from ion_npe.design import DesignSpace, expand_free_gates
 from ion_npe.joint import (
-    N_FREE_GATES, N_GATES, _bounds, _latin_bounds, _pick_lowest, _unpack, project_joint_row,
+    N_FREE_GATES, N_GATES, _bounds, _draw_gaussian, _gaussian_std, _latin_bounds,
+    _pick_lowest, _unpack, project_joint_row,
 )
 
 
@@ -59,6 +60,18 @@ class JointSearchTests(unittest.TestCase):
         wide_lo, wide_hi = _latin_bounds(space, lower, upper, center=nominal, scale=10.0)
         np.testing.assert_allclose(wide_lo, lower)
         np.testing.assert_allclose(wide_hi, upper)
+
+    def test_gaussian_variance_is_the_uniform_range(self):
+        space = DesignSpace()
+        lower, upper = _bounds(space)
+        std = _gaussian_std(lower, upper)
+        np.testing.assert_allclose(std ** 2, (upper - lower) ** 2 / 12.0)
+        mean = np.concatenate([space.nominal(), np.zeros(N_FREE_GATES)])
+        rows = _draw_gaussian(np.random.default_rng(0), 30, mean, lower, upper, space)
+        self.assertEqual(rows.shape, (30, len(lower)))
+        self.assertTrue(np.all(rows >= lower - 1e-12))
+        self.assertTrue(np.all(rows <= upper + 1e-12))
+        self.assertTrue(np.all(np.isfinite(rows)))
 
 
 if __name__ == "__main__":

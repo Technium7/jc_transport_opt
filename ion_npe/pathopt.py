@@ -1,7 +1,8 @@
 """Trajectory search over the bend radius, the path height, and ``(a, b)``.
 
-The junction stays at the developed design. Height from the start through the
-bend stays within 15 um of 50 um. The end uses the start height. Time-gate
+The junction stays at the developed design. Seven height controls run from
+the start to the crossing and stay within 15 um of 50 um. The start and the
+end stay at 50 um, and the return copies the inbound height. Time-gate
 offsets move with the path.
 """
 
@@ -220,19 +221,18 @@ def optimize_trajectory(
     )
     lines = [
         "junction fixed at the developed design",
-        "start and end height: searched together, within 15 um of 50 um",
+        "start and end height: fixed at 50 um",
         "trajectories simulated: {}".format(len(totals)),
         "nominal total quanta: {:.6g}".format(float(totals[0])),
         "best total quanta: {:.6g}".format(float(totals[best_i])),
         "best quanta: {}".format(
             " ".join("{:.6g}".format(float(v)) for v in quanta[best_i].reshape(-1))
         ),
-        "best start and end height: {:.2f} um".format(design.z_arm * 50.0),
-        "best bend entrance: {:.2f} um".format(design.z_bend * 50.0),
+        "best start and end height: 50 um",
         "best crossing height: {:.2f} um".format(design.z_cross * 50.0),
         "best bend radius s: {:.2f} um".format(design.cross_s * 50.0),
-        "best bend control height: {:.2f} to {:.2f} um".format(
-            design.interior_z.min() * 50.0, design.interior_z.max() * 50.0
+        "best height controls: {:.2f} to {:.2f} um".format(
+            design.height_z.min() * 50.0, design.height_z.max() * 50.0
         ),
     ]
     text = "\n".join(lines) + "\n"

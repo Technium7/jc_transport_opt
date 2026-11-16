@@ -33,7 +33,7 @@ from .constants import L_SCALE, NOISE_SEEDS, NOISE_STD_VM, SIM_DT, TRANSPORT_SPE
 from .dataset import Dataset, collect_dataset
 from .design import DesignSpace
 from .demo import run_demo
-from .joint import optimize_joint
+from .joint import collect_noise_sweep, optimize_joint
 from .local import optimize_local
 from .pathopt import optimize_trajectory
 from .plotting import plot_trajectory
@@ -92,7 +92,7 @@ def _cmd_simulate(args):
         result.duration_s * 1e6,
         result.n_hold * SIM_DT * 1e9,
     ))
-    print("start and end height {:.2f} um".format(design.z_arm * L_SCALE * 1e6))
+    print("start and end height fixed at 50 um")
     print("bend entrance {:.2f} um, crossing height {:.2f} um".format(
         design.z_bend * L_SCALE * 1e6, design.z_cross * L_SCALE * 1e6
     ))
@@ -220,6 +220,16 @@ def _cmd_nearby(args):
         simulate_kwargs=dict(_physics(args), seeds=tuple(args.seeds)),
         cooptimize=args.cooptimize,
         warm_start=args.warm or None,
+    )
+
+
+def _cmd_sweep(args):
+    collect_noise_sweep(
+        args.out,
+        args.noise_levels,
+        n=args.n,
+        seed=args.seed,
+        simulate_kwargs=_physics(args),
     )
 
 
@@ -385,7 +395,7 @@ def main(argv=None):
     )
     _add_physics(joint)
     joint.add_argument("-o", "--out", type=str, default="outputs/joint")
-    joint.add_argument("-n", type=int, default=5000, help="training designs drawn near the nominal junction, trajectory, and waveform")
+    joint.add_argument("-n", type=int, default=5000, help="Gaussian training designs, mean at the nominal design")
     joint.add_argument("--iterations", type=int, default=6, help="cross-entropy rounds; each round adds simulations")
     joint.add_argument("--active", type=int, default=4, help="active-learning rounds after the cross-entropy rounds")
     joint.add_argument("--screen", type=int, default=256, help="candidate designs scored by the network each round")
@@ -394,12 +404,29 @@ def main(argv=None):
         "--latin-scale",
         type=float,
         default=1.0,
-        help="scale the first Latin neighborhood around the nominal path; 1 is the nearby-search box",
+        help="kept for older command lines; the training sample is a Gaussian and does not use this",
     )
     joint.add_argument("--epochs", type=int, default=40)
     joint.add_argument("--lbfgs", type=int, default=20)
     joint.add_argument("--seed", type=int, default=0)
     joint.set_defaults(func=_cmd_joint)
+
+    sweep = sub.add_parser(
+        "sweep",
+        help="simulate one nominal Gaussian sample at several stray-field amplitudes",
+    )
+    _add_physics(sweep)
+    sweep.add_argument("-o", "--out", type=str, default="outputs/field_gauss")
+    sweep.add_argument("-n", type=int, default=1000, help="varied designs; the nominal design is added")
+    sweep.add_argument(
+        "--noise-levels",
+        type=float,
+        nargs="+",
+        default=[0.0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0],
+        help="stray-field amplitudes in V/m; the same designs are simulated at each. Zero uses one seed and a positive field uses 20",
+    )
+    sweep.add_argument("--seed", type=int, default=0)
+    sweep.set_defaults(func=_cmd_sweep)
 
     nearby = sub.add_parser(
         "nearby",

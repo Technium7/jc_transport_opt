@@ -1,11 +1,12 @@
 """Junction and trajectory design vector.
 
 The search coordinates are the eight symmetric Y-junction controls, the bend
-radius ``cross_s``, the start height, the arm-control heights, the bend
-entrance, the seven bend-control heights, and the ``(a, b)`` time profile.
-``cross_s`` fixes the bend ``(x, y)``. Those coordinates are not separate
-search parameters. ``cross_s`` and each height stay within 15 um of the RF
-center. The arm ``(x, y)`` stays on the developed path.
+radius ``cross_s``, seven height controls from the start to the crossing, and
+the ``(a, b)`` time profile. ``cross_s`` fixes the bend ``(x, y)``. Those
+coordinates are not separate search parameters. The start and the end stay at
+50 um. The return height copies the inbound height, the way the return
+waveform copies the outbound gates. ``cross_s`` and each height control stay
+within 15 um of the RF center. The arm ``(x, y)`` stays on the developed path.
 """
 
 from dataclasses import dataclass, field
@@ -40,7 +41,14 @@ _DEVELOPED_STATIONS = np.array([
     [-0.1459, 0.0429],
 ], dtype=float)
 N_INTERIOR = len(_DEVELOPED_STATIONS)
-_CROSS_S = 0.1
+# Height controls from just after the start through the crossing. The start
+# itself is fixed at 50 um and is not one of these seven. The return half
+# copies them in reverse, so the end is 50 um as well.
+N_HEIGHT = 7
+# Arc stations of the seven bend controls are taken from the developed curve.
+# The nominal design uses a tighter bend, 2 um from the origin.
+_DEVELOPED_S = 0.1
+_CROSS_S = 2e-6 / L_SCALE
 _CROSS_HI = CROSS_CAP_M / L_SCALE
 _MIRROR_ANGLE = 2.0 * np.pi / 3.0
 _MIRROR_HAT = np.array([np.cos(_MIRROR_ANGLE), np.sin(_MIRROR_ANGLE)])
@@ -147,7 +155,7 @@ def bend_centerline(bend_x, handle, end_handle, cross_s, n=4000):
 
 def _station_arc():
     """Arc-length fractions of the seven developed bend controls."""
-    points, _normal, arc = bend_centerline(-1.0, 0.12, 0.048, _CROSS_S)
+    points, _normal, arc = bend_centerline(-1.0, 0.12, 0.048, _DEVELOPED_S)
     total = float(arc[-1])
     fractions = []
     for station in _DEVELOPED_STATIONS:
@@ -199,13 +207,9 @@ def _feature_table():
         ("ci_l", 0.60, 1.80),
         ("co_l", 3.50, 6.50),
         ("cross_s", 0.0, _CROSS_HI),
-        ("z_arm", ION_HEIGHT - z_half, ION_HEIGHT + z_half),
     ]
-    for index in range(N_ARM):
-        rows.append(("a{}_z".format(index), ION_HEIGHT - z_half, ION_HEIGHT + z_half))
-    rows.append(("z_bend", ION_HEIGHT - z_half, ION_HEIGHT + z_half))
-    for index in range(N_INTERIOR):
-        rows.append(("c{}_z".format(index), ION_HEIGHT - z_half, ION_HEIGHT + z_half))
+    for index in range(N_HEIGHT):
+        rows.append(("h{}_z".format(index), ION_HEIGHT - z_half, ION_HEIGHT + z_half))
     rows.extend([
         ("curve_a", 1.20, 5.50),
         ("curve_b", 0.60, 2.80),
@@ -222,11 +226,13 @@ class TransportDesign:
     """One Y junction and one round-trip trajectory through it.
 
     ``cross_s`` is the bend radius. It fixes the control ``(x, y)``. Those
-    coordinates are not separate search parameters. ``z_arm`` is the height at
-    the start, and the end uses the same height. ``arm_xyz`` keeps the
-    developed ``(x, y)`` and stores a searched height at each arm station.
-    ``z_bend`` is the height where the arm meets the bend. ``interior_z`` is
-    the height of each bend control. Every height stays within 15 um of 50 um.
+    coordinates are not separate search parameters. ``height_z`` is seven
+    heights from just after the start through the crossing, equally spaced in
+    arc length and independent of the transport waveform. The start is fixed
+    at 50 um, and the return copies these heights in reverse, so the end is
+    50 um too. The last control is the crossing height. The bend and
+    arm ``(x, y)`` stay on the developed geometry. Every height control stays
+    within 15 um of 50 um.
     """
 
     junction: np.ndarray
@@ -244,6 +250,7 @@ class TransportDesign:
     z_bend: float = ION_HEIGHT
     z_cross: float = ION_HEIGHT
     z_arm: float = ION_HEIGHT
+    height_z: np.ndarray = field(default_factory=lambda: np.full(N_HEIGHT, ION_HEIGHT))
     interior_xyz: np.ndarray = field(init=False)
 
     def __post_init__(self):
@@ -269,9 +276,12 @@ class TransportDesign:
         if len(self.curves) != 2:
             raise ValueError("curves must be (a, b)")
         self.curves = (float(self.curves[0]), float(self.curves[1]))
-        self.z_arm = float(self.z_arm)
-        self.z_bend = float(self.z_bend)
-        self.z_cross = float(self.z_cross)
+        self.height_z = np.asarray(self.height_z, dtype=float).reshape(-1).copy()
+        if self.height_z.size != N_HEIGHT:
+            raise ValueError("height_z must have length {}".format(N_HEIGHT))
+        self.z_arm = float(ION_HEIGHT)
+        self.z_bend = float(ION_HEIGHT)
+        self.z_cross = float(self.height_z[-1])
         self.arm_handle = float(self.arm_handle)
         if self.arm_handle <= 0.0:
             raise ValueError("arm_handle must be positive")
@@ -286,9 +296,7 @@ class TransportDesign:
             raise ValueError("cross_s must be non-negative")
         if not self.bend_x > self.x_start:
             raise ValueError("bend_x must be greater than x_start")
-        heights = np.concatenate([
-            self.arm_xyz[:, 2], self.interior_z, [self.z_bend, self.z_cross],
-        ])
+        heights = np.concatenate([self.height_z, [self.z_arm]])
         if min(self.z_arm, float(heights.min())) <= 0.05:
             raise ValueError("ion height must stay above the chip")
         n_interior = int(self.n_time_gates) - 1
@@ -308,11 +316,18 @@ class TransportDesign:
             value = np.asarray(value, dtype=float).reshape(-1)
             if value.size:
                 value = symmetric_gate_offsets(value)
+        if name == "z_arm":
+            value = float(ION_HEIGHT)
         if name == "cross_s" and not isinstance(value, property):
             value = float(np.asarray(value, dtype=float).reshape(-1)[0])
         if name == "interior_z":
             value = np.asarray(value, dtype=float).reshape(-1).copy()
+        if name == "height_z":
+            value = np.asarray(value, dtype=float).reshape(-1).copy()
         object.__setattr__(self, name, value)
+        if name == "height_z" and getattr(self, "height_z", None) is not None:
+            if self.height_z.size:
+                object.__setattr__(self, "z_cross", float(self.height_z[-1]))
         if name in ("cross_s", "interior_z", "bend_x", "handle", "end_handle"):
             if hasattr(self, "cross_s") and hasattr(self, "interior_z"):
                 try:
@@ -335,10 +350,8 @@ def within_transport_caps(design):
     if design.cross_s * L_SCALE > CROSS_CAP_M + 1e-12:
         return False
     heights = np.concatenate([
+        design.height_z,
         [design.z_arm],
-        design.arm_xyz[:, 2],
-        design.interior_z,
-        [design.z_bend, design.z_cross],
     ])
     deviation_m = np.abs(heights - ION_HEIGHT) * L_SCALE
     return bool(np.all(deviation_m <= HEIGHT_CAP_M + 1e-12))
@@ -362,10 +375,11 @@ class DesignSpace:
         return len(self.names)
 
     def nominal_design(self):
-        """Developed junction. Radius ``cross_s`` is 0.1 and every height is 50 um."""
+        """Developed junction. The bend radius is 2 um and every height is 50 um."""
         return TransportDesign(
             junction=DEFAULT_JUNCTION.copy(),
             interior_z=np.full(N_INTERIOR, ION_HEIGHT),
+            height_z=np.full(N_HEIGHT, ION_HEIGHT),
             curves=(3.0, 1.5),
             arm_xyz=np.array(_ARM, dtype=float),
             cross_s=_CROSS_S,
@@ -384,10 +398,8 @@ class DesignSpace:
     def pack(self, design):
         values = np.concatenate([
             np.asarray(design.junction, dtype=float).reshape(8),
-            [float(design.cross_s), float(design.z_arm)],
-            np.asarray(design.arm_xyz[:, 2], dtype=float).reshape(N_ARM),
-            [float(design.z_bend)],
-            np.asarray(design.interior_z, dtype=float).reshape(N_INTERIOR),
+            [float(design.cross_s)],
+            np.asarray(design.height_z, dtype=float).reshape(N_HEIGHT),
             [design.curves[0], design.curves[1]],
         ])
         if values.size != self.dim:
@@ -400,25 +412,20 @@ class DesignSpace:
             raise ValueError(
                 "design vector has length {}, expected {}".format(x.size, self.dim)
             )
-        arm = np.array(_ARM, dtype=float)
-        arm[:, 2] = x[10:10 + N_ARM]
-        bend_z = 10 + N_ARM
-        interior = bend_z + 1
-        curves = interior + N_INTERIOR
+        height = 9
+        curves = height + N_HEIGHT
         return TransportDesign(
             junction=x[:8],
-            interior_z=x[interior:interior + N_INTERIOR],
+            interior_z=np.full(N_INTERIOR, ION_HEIGHT),
+            height_z=x[height:height + N_HEIGHT],
             curves=(float(x[curves]), float(x[curves + 1])),
-            arm_xyz=arm,
+            arm_xyz=np.array(_ARM, dtype=float),
             cross_s=x[8],
             x_start=self.x_start,
             bend_x=self.bend_x,
             handle=self.handle,
             end_handle=self.end_handle,
             arm_handle=self.arm_handle,
-            z_arm=float(x[9]),
-            z_bend=float(x[bend_z]),
-            z_cross=ION_HEIGHT,
         )
 
     def clip(self, vector):

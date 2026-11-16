@@ -496,7 +496,7 @@ def optimize_local(
         if cooptimize else "local search starting at the nominal path",
         force_line(simulate_kwargs),
         stray_field_line(simulate_kwargs),
-        "start and end height: searched together, within 15 um of 50 um",
+        "start and end height: fixed at 50 um",
         "designs simulated: {}".format(len(totals)),
         "waveform samples: {}".format(wave_n),
         "junction samples: {}".format(junc_n),
@@ -531,10 +531,10 @@ def optimize_local(
         "trajectory shift from nominal, unit norm: {:.4g}".format(path_shift),
         "waveform shift from nominal, gate norm: {:.4g}".format(gate_shift),
         "best bend radius s: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
-        "best start and end height: {:.2f} um".format(design.z_arm * L_SCALE * 1e6),
-        "best bend height: {:.2f} to {:.2f} um".format(
-            design.interior_z.min() * L_SCALE * 1e6,
-            design.interior_z.max() * L_SCALE * 1e6,
+        "best start and end height: 50 um",
+        "best height controls: {:.2f} to {:.2f} um".format(
+            design.height_z.min() * L_SCALE * 1e6,
+            design.height_z.max() * L_SCALE * 1e6,
         ),
     ]
     text = "\n".join(lines) + "\n"

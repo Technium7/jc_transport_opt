@@ -4,11 +4,13 @@ import unittest
 
 import numpy as np
 
+from ion_npe.dataset import design_is_admissible
 from ion_npe.design import DesignSpace, N_INTERIOR, symmetric_gate_offsets
 from ion_npe.trajectory import (
     MIRROR_HAT,
     control_polygon,
     end_point,
+    height_fractions,
     height_within_cap,
     one_sided_time_gates,
     path_geometry,
@@ -76,18 +78,49 @@ class TrajectoryTests(unittest.TestCase):
         np.testing.assert_allclose(mid[:2], design.cross_s * MIRROR_HAT, atol=0.03)
         np.testing.assert_allclose(mid[2], design.z_cross, atol=1e-6)
 
-    def test_height_follows_the_bend_controls(self):
+    def test_height_follows_the_seven_controls_and_is_symmetric(self):
         design = DesignSpace().nominal_design()
-        design.interior_z = np.full(N_INTERIOR, 0.85)
-        polygon = control_polygon(design)
-        self.assertAlmostEqual(polygon[0, 2], 1.0)
-        self.assertAlmostEqual(polygon[-1, 2], 1.0)
-        self.assertEqual(len(polygon), 2 + N_INTERIOR + 2)
+        design.height_z = np.full(7, 0.85)
         path = path_geometry(design, n=601)
         self.assertAlmostEqual(path[0, 2], 1.0, places=6)
         self.assertAlmostEqual(path[-1, 2], 1.0, places=6)
+        self.assertAlmostEqual(path[len(path) // 2, 2], 0.85, places=5)
         self.assertLess(path[:, 2].min(), 0.95)
-        self.assertAlmostEqual(path[len(path) // 2, 2], 1.0, places=2)
+        np.testing.assert_allclose(path[:, 2], path[::-1, 2], atol=1e-8)
+        fractions = height_fractions(design)
+        np.testing.assert_allclose(fractions, np.linspace(0.0, 1.0, 8))
+        design.curves = (4.2, 2.1)
+        design.gate_offsets = np.array([
+            0.02, -0.01, 0.015, -0.005, 0.0, 0.005, -0.015, 0.01, -0.02,
+        ])
+        np.testing.assert_allclose(height_fractions(design), fractions)
+
+    def test_last_height_control_is_the_crossing(self):
+        from ion_npe.plotting import _height_control_points
+        from ion_npe.trajectory import round_trip_arc
+
+        design = DesignSpace().nominal_design()
+        design.height_z = np.array([1.1, 0.9, 1.15, 0.85, 1.05, 0.95, 1.2])
+        distance, _height, labels = _height_control_points(design)["height"]
+        parameter, arc = round_trip_arc(design)
+        crossing = float(np.interp(0.5 * parameter[-1], parameter, arc))
+        self.assertAlmostEqual(float(distance[labels.index("h6")]), crossing, places=6)
+        self.assertAlmostEqual(float(distance[labels.index("end")]), float(arc[-1]), places=6)
+
+    def test_a_folded_waveform_does_not_move_the_height_stations(self):
+        from ion_npe.schedule import schedule_is_admissible
+
+        design = DesignSpace().nominal_design()
+        design.curves = (3.97315116465764, 2.448456161080315)
+        design.gate_offsets = np.array([
+            -0.07269218, 0.08740643, 0.07770415, 0.04510903, 0.0,
+            -0.04510903, -0.07770415, -0.08740643, 0.07269218,
+        ])
+        np.testing.assert_allclose(height_fractions(design), np.linspace(0.0, 1.0, 8))
+        self.assertTrue(height_within_cap(design))
+        self.assertFalse(schedule_is_admissible(
+            design.gate_offsets, design.curves, design.n_time_gates,
+        ))
 
     def test_radius_fixes_bend_xy(self):
         design = DesignSpace().nominal_design()
@@ -116,6 +149,7 @@ class TrajectoryTests(unittest.TestCase):
         design = DesignSpace().nominal_design()
         self.assertTrue(height_within_cap(design))
         design.interior_z = np.full(N_INTERIOR, 1.8)
+        design.height_z = np.full(7, 1.8)
         self.assertFalse(height_within_cap(design))
 
 

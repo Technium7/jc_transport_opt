@@ -1,11 +1,12 @@
 """One search over the junction, the trajectory, and the waveform.
 
-The first Latin sample trains the network. It is drawn in a box around the
-nominal path, not over the full legal range, so stray-field runs still see
-usable heating. Cross-entropy rounds then simulate the designs the network
-ranks as coldest. Height from the start through the bend stays within
-15 um of 50 um. The free trajectory coordinates are the bend radius, the
-start and arm heights, the bend heights, and ``(a, b)``.
+The training sample is a Gaussian. Its mean is the nominal design and each
+coordinate's variance is that of a uniform draw over the legal range, so the
+cloud sits on the developed path and still reaches the bounds. Cross-entropy
+rounds then simulate the designs the network ranks as coldest. Height along the arm and through the bend, including the
+crossing, stays within 15 um of 50 um. The start and the end stay at 50 um.
+The free trajectory coordinates are the bend radius, the seven height
+controls from the start to the crossing, and ``(a, b)``.
 The waveform coordinates are the four outbound gates. The center gate stays
 at 0, and the return half is their mirror.
 """
@@ -192,12 +193,215 @@ def _extend_joint(rows, quanta, totals, prepared, packed, limit, label, log_ever
     return rows, quanta, totals
 
 
+def _gaussian_std(lower, upper):
+    """Standard deviation of a uniform draw across each legal range.
+
+    The Gaussian mean is the nominal design. Its variance on coordinate ``i``
+    is ``(upper - lower) ** 2 / 12``, the variance of the uniform distribution
+    on that coordinate's legal interval.
+    """
+    span = np.asarray(upper, dtype=float) - np.asarray(lower, dtype=float)
+    return span / np.sqrt(12.0)
+
+
+def _draw_gaussian(rng, n, mean, lower, upper, space):
+    """Admissible joint rows from the nominal Gaussian, clipped to the box."""
+    mean = np.asarray(mean, dtype=float).reshape(-1)
+    lower = np.asarray(lower, dtype=float)
+    upper = np.asarray(upper, dtype=float)
+    std = _gaussian_std(lower, upper)
+    rows = []
+    seen = 0
+    cap = max(int(n) * 80, 80)
+    while len(rows) < int(n) and seen < cap:
+        batch_n = min(max((int(n) - len(rows)) * 3, 64), 512)
+        drawn = np.clip(rng.normal(mean, std, size=(batch_n, mean.size)), lower, upper)
+        seen += batch_n
+        for row in drawn:
+            prepared = project_joint_row(row)
+            if _admissible(_unpack(space, prepared)):
+                rows.append(prepared)
+                if len(rows) >= int(n):
+                    break
+    if len(rows) < int(n):
+        raise RuntimeError(
+            "could not draw {} admissible Gaussian designs after {} tries".format(n, seen)
+        )
+    return np.vstack(rows)
+
+
+def _collect_gaussian(rng, n, mean, lower, upper, space, simulate_kwargs):
+    """Simulate admissible draws from the nominal Gaussian until ``n`` succeed."""
+    from .farm import get_farm, width_for
+
+    farm = get_farm()
+    rows = []
+    quanta = []
+    totals = []
+    queue = []
+    while len(rows) < int(n):
+        if not queue:
+            need = int(n) - len(rows)
+            queue = list(_draw_gaussian(rng, max(need * 2, 64), mean, lower, upper, space))
+        need = int(n) - len(rows)
+        take = min(len(queue), width_for(need, farm.size))
+        chunk = queue[:take]
+        del queue[:take]
+        packed = farm.simulate("joint", np.vstack(chunk), simulate_kwargs)
+        rows, quanta, totals = _extend_joint(
+            rows, quanta, totals, chunk, packed, n, "varied", log_every=50,
+        )
+    return np.vstack(rows), np.stack(quanta), np.asarray(totals, dtype=float)
+
+
+def _noise_tag(amplitude):
+    return "{:.3g}".format(float(amplitude)).replace(".", "p").replace("-", "m")
+
+
+def collect_noise_sweep(out, amplitudes, n=1000, seed=0, simulate_kwargs=None):
+    """Simulate one nominal Gaussian sample at every stray-field amplitude.
+
+    The design rows are identical across amplitudes, so a later network can
+    take the field strength as an input. Zero field uses one seed. A positive
+    field uses 20 seeds. Each amplitude is saved as its own ``joint.npz`` and
+    is skipped when that file already matches this sample.
+    """
+    from .farm import get_farm
+
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    amplitudes = [float(item) for item in amplitudes]
+    if not amplitudes or any(item < 0.0 for item in amplitudes):
+        raise ValueError("stray-field amplitudes must be non-negative")
+    space = DesignSpace()
+    lower, upper = _bounds(space)
+    nominal = np.concatenate([space.nominal(), np.zeros(N_FREE_GATES)])
+    rng = np.random.default_rng(seed)
+    design_path = out / "designs.npz"
+    if design_path.exists():
+        saved = np.load(design_path)
+        rows = np.asarray(saved["rows"], dtype=float)
+        if rows.shape != (int(n) + 1, len(lower)) or int(saved["seed"]) != int(seed):
+            raise RuntimeError(
+                "saved designs in {} do not match n={} seed={}".format(design_path, n, seed)
+            )
+        print("loaded {} shared designs from {}".format(len(rows), design_path), flush=True)
+    else:
+        print(
+            "drawing {} gaussian designs, mean at the nominal design, "
+            "variance of each legal range".format(int(n)),
+            flush=True,
+        )
+        varied = _draw_gaussian(rng, int(n), nominal, lower, upper, space)
+        rows = np.vstack([nominal.reshape(1, -1), varied])
+        np.savez(
+            design_path,
+            rows=rows,
+            seed=np.int64(seed),
+            amplitudes=np.asarray(amplitudes, dtype=float),
+            lower=lower,
+            upper=upper,
+        )
+        print("saved {} shared designs".format(len(rows)), flush=True)
+
+    farm = get_farm()
+    for amplitude in amplitudes:
+        tag = _noise_tag(amplitude)
+        folder = out / "noise_{}".format(tag)
+        folder.mkdir(parents=True, exist_ok=True)
+        cache = folder / "joint.npz"
+        kwargs = dict(simulate_kwargs or {})
+        kwargs["noise_std_Vm"] = float(amplitude)
+        kwargs = simulation_settings(kwargs)
+        if cache.exists():
+            data = np.load(cache)
+            quanta = np.asarray(data["quanta"], dtype=float)
+            if (
+                quanta.shape[0] == len(rows)
+                and quanta.shape[1] == len(kwargs["seeds"])
+                and float(data["noise_std_Vm"]) == float(amplitude)
+            ):
+                print("keeping saved {:.4g} V/m sample".format(amplitude), flush=True)
+                continue
+        print(
+            "simulating {} designs at {:.4g} V/m, {} seeds".format(
+                len(rows), amplitude, len(kwargs["seeds"])
+            ),
+            flush=True,
+        )
+        done = 0
+        quanta_parts = []
+        total_parts = []
+        if cache.exists():
+            data = np.load(cache)
+            saved_q = np.asarray(data["quanta"], dtype=float)
+            if (
+                saved_q.ndim == 3
+                and saved_q.shape[1] == len(kwargs["seeds"])
+                and float(data["noise_std_Vm"]) == float(amplitude)
+                and saved_q.shape[0] <= len(rows)
+            ):
+                done = int(saved_q.shape[0])
+                quanta_parts.append(saved_q)
+                total_parts.append(np.asarray(data["totals"], dtype=float))
+                print("  resuming at {}/{}".format(done, len(rows)), flush=True)
+        while done < len(rows):
+            chunk = rows[done:done + 128]
+            packed = farm.simulate("joint", chunk, kwargs)
+            quanta_parts.append(np.stack([item["quanta"] for item in packed]))
+            total_parts.append(np.asarray([
+                float(total_heating(item["quanta"])) if item["ok"] else np.nan
+                for item in packed
+            ]))
+            done += len(chunk)
+            quanta = np.concatenate(quanta_parts, axis=0)
+            totals = np.concatenate(total_parts)
+            failed = int(np.sum(~np.isfinite(totals)))
+            np.savez(
+                cache,
+                rows=rows[:done],
+                quanta=quanta,
+                totals=totals,
+                noise_std_Vm=np.float64(amplitude),
+                seeds=np.asarray(kwargs["seeds"], dtype=int),
+                n_train=np.int64(done),
+                origin=np.array(["nominal"] + ["gaussian"] * (done - 1), dtype="U16"),
+            )
+            print(
+                "  {:.4g} V/m  {:4d}/{}  failed {}".format(amplitude, done, len(rows), failed),
+                flush=True,
+            )
+        quanta = np.concatenate(quanta_parts, axis=0)
+        totals = np.concatenate(total_parts)
+        failed = int(np.sum(~np.isfinite(totals)))
+        np.savez(
+            cache,
+            rows=rows,
+            quanta=quanta,
+            totals=totals,
+            noise_std_Vm=np.float64(amplitude),
+            seeds=np.asarray(kwargs["seeds"], dtype=int),
+            n_train=np.int64(len(rows)),
+            origin=np.array(["nominal"] + ["gaussian"] * int(n), dtype="U16"),
+        )
+        print(
+            "  {:.4g} V/m  nominal {:.4g}  best varied {:.4g}  failed {}".format(
+                amplitude,
+                float(totals[0]) if np.isfinite(totals[0]) else float("nan"),
+                float(np.nanmin(totals[1:])) if np.isfinite(totals[1:]).any() else float("nan"),
+                failed,
+            ),
+            flush=True,
+        )
+    print("field sweep saved under {}".format(out), flush=True)
+
+
 def _collect_latin(rng, n, lower, upper, space, simulate_kwargs, sample_lower=None, sample_upper=None):
-    """Space-filling joint designs near the nominal path.
+    """Space-filling joint designs inside a box.
 
     ``sample_lower`` and ``sample_upper`` set the Latin box. They default to
-    the full legal range. The neighborhood used by ``optimize_joint`` is much
-    smaller, so the training set stays near the developed design.
+    the full legal range. The training sample used by ``optimize_joint`` is
+    the nominal Gaussian, not this hypercube.
     """
     from scipy.stats.qmc import LatinHypercube
 
@@ -440,14 +644,16 @@ def optimize_joint(
 ):
     """Train on the joint sample, then add CEM and active-learning simulations.
 
-    The Latin hypercube is the training set. It is drawn in a neighborhood of
-    the nominal path (see ``_latin_bounds``); ``latin_scale`` multiplies that
-    box. It is resimulated only when a saved sample of at least ``n`` designs
-    is not already on disk. Each CEM round draws an elite cloud and a
-    neighborhood of the best design, both of which move the junction, the
-    path, and the gates, and integrates the designs the network ranks lowest
-    in each cloud. Each active round screens a fresh space-filling pool and
-    integrates the low-heating, high-uncertainty designs.
+    The training set is a Gaussian centered on the nominal design. Each
+    coordinate uses the variance of a uniform draw over its legal range, and
+    samples are clipped to that range. It is resimulated only when a saved
+    sample of at least ``n`` designs is not already on disk. ``latin_scale``
+    is accepted so older command lines still run; the Gaussian does not use
+    it. Each CEM round draws an elite cloud and a neighborhood of the best
+    design, both of which move the junction, the path, and the gates, and
+    integrates the designs the network ranks lowest in each cloud. Each active
+    round screens a fresh space-filling pool and integrates the low-heating,
+    high-uncertainty designs.
     """
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -455,9 +661,6 @@ def optimize_joint(
     space = DesignSpace()
     lower, upper = _bounds(space)
     nominal = np.concatenate([space.nominal(), np.zeros(N_FREE_GATES)])
-    sample_lower, sample_upper = _latin_bounds(
-        space, lower, upper, center=nominal, scale=latin_scale,
-    )
     cache = out / "joint.npz"
     rng = np.random.default_rng(seed)
     local_std = _std(space, lower, upper, 0.03)
@@ -498,13 +701,12 @@ def optimize_joint(
                 total_parts.append(float(total_heating(wave_result.quanta)))
                 print("  heating {:.4g}".format(total_parts[-1]), flush=True)
         print(
-            "latin sample of {} designs near the nominal junction, trajectory, and waveform "
-            "(scale {:.2f})".format(int(n), float(latin_scale)),
+            "gaussian sample of {} designs, mean at the nominal design, "
+            "variance of each legal range".format(int(n)),
             flush=True,
         )
-        drawn, drawn_q, drawn_total = _collect_latin(
-            rng, int(n), lower, upper, space, simulate_kwargs,
-            sample_lower=sample_lower, sample_upper=sample_upper,
+        drawn, drawn_q, drawn_total = _collect_gaussian(
+            rng, int(n), nominal, lower, upper, space, simulate_kwargs,
         )
         pieces.append(drawn)
         quanta_parts.append(drawn_q)
@@ -609,22 +811,21 @@ def optimize_joint(
         return float(np.min(totals[indices]))
 
     lines = [
-        "training set is a latin sample near the nominal junction, trajectory, and waveform",
+        "training set is a gaussian at the nominal design, variance of each legal range",
         force_line(simulate_kwargs),
         stray_field_line(simulate_kwargs),
         heating_line(simulate_kwargs),
-        "start and end height: searched together, within 15 um of 50 um",
-        "arm and bend heights: searched, within 15 um of 50 um",
+        "start and end height: fixed at 50 um",
+        "height controls: seven, from the start to the crossing, return is the mirror",
         "free waveform gates: {}".format(N_FREE_GATES),
-        "latin neighborhood scale: {:.2f}".format(float(latin_scale)),
         "training designs: {}".format(int(n_train)),
-        "latin varied designs: {}".format(len(latin)),
+        "gaussian varied designs: {}".format(len(latin)),
         "junction unit std: {:.3f}".format(float(unit[:, :8].std())),
         "trajectory unit std: {:.3f}".format(float(unit[:, 8:].std())),
         "waveform unit std: {:.3f}".format(float(gate_unit.std())),
         "nominal total quanta: {:.6g}".format(float(totals[0])),
         "reference waveform quanta: {:.6g}".format(float(totals[1]) if n_ref > 1 else float("nan")),
-        "best latin total quanta: {:.6g}".format(_best(latin)),
+        "best gaussian total quanta: {:.6g}".format(_best(latin)),
         "CEM rounds: {}".format(int(iterations)),
         "CEM simulations: {}".format(len(cem)),
         "best CEM total quanta: {}".format(
@@ -649,14 +850,11 @@ def optimize_joint(
         "trajectory shift from nominal, unit norm: {:.4g}".format(path_shift),
         "waveform shift from nominal, gate norm: {:.4g}".format(gate_shift),
         "plotted bend radius s: {:.2f} um".format(design.cross_s * L_SCALE * 1e6),
-        "plotted start and end height: {:.2f} um".format(design.z_arm * L_SCALE * 1e6),
-        "plotted arm height: {:.2f} to {:.2f} um".format(
-            design.arm_xyz[:, 2].min() * L_SCALE * 1e6,
-            design.arm_xyz[:, 2].max() * L_SCALE * 1e6,
-        ),
-        "plotted bend height: {:.2f} to {:.2f} um".format(
-            design.interior_z.min() * L_SCALE * 1e6,
-            design.interior_z.max() * L_SCALE * 1e6,
+        "plotted start and end height: 50 um",
+        "plotted crossing height: {:.2f} um".format(design.z_cross * L_SCALE * 1e6),
+        "plotted height controls: {:.2f} to {:.2f} um".format(
+            design.height_z.min() * L_SCALE * 1e6,
+            design.height_z.max() * L_SCALE * 1e6,
         ),
     ]
     text = "\n".join(lines) + "\n"

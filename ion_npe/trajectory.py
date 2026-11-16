@@ -1,17 +1,19 @@
 """Three-dimensional transport path and the time law that moves along it.
 
-The ion starts at ``(x_start, 0, z_arm)`` and ends at the reflection of that
-point, at the same height. ``z_arm`` and the arm-control heights are searched.
-The arm ``(x, y)`` stays on the developed path. The bend radius ``cross_s``
-fixes the bend ``(x, y)``. ``z`` is taken from the design. It is not solved
-from a height model.
+The ion starts at ``(x_start, 0, 50 um)`` and ends at the reflection of that
+point, also at 50 um. Seven height controls run from just after the start to
+the crossing, equally spaced in arc length and independent of the waveform.
+The last one is the crossing. The return copies those heights in reverse. The arm ``(x, y)``
+stays on the developed path. The bend radius ``cross_s`` fixes the bend
+``(x, y)``. ``z`` is taken from the height controls. It is not solved from a
+height model.
 """
 
 import numpy as np
 from scipy.interpolate import BSpline, CubicSpline
 
 from .constants import HEIGHT_CAP_M, ION_HEIGHT, L_SCALE
-from .design import TransportDesign
+from .design import N_HEIGHT, TransportDesign
 
 
 def generate_knot_vector(num_ctrlpts, degree=3):
@@ -191,10 +193,10 @@ def _require_design(design):
 def arm_polygon(design):
     """Clamped controls of the inbound arm.
 
-    The path leaves the start at ``z_arm``, tangent to the arm, and the end of
-    the round trip returns to that same height. It arrives at the bend
-    entrance at ``z_bend``, with a flat vertical tangent. The arm controls
-    keep the developed ``(x, y)`` and use the searched heights.
+    The path leaves the start at 50 um, tangent to the arm, and the end of the
+    round trip returns to 50 um. It arrives at the bend entrance at
+    ``z_bend``, with a flat vertical tangent. The arm controls keep the
+    developed ``(x, y)`` and use the searched heights.
     """
     _require_design(design)
     start = np.array([design.x_start, 0.0, design.z_arm])
@@ -284,14 +286,44 @@ def make_inbound(design):
     return InboundPath(arm_of_s, arm_length, bend_of_s, bend_length), bend
 
 
+def height_fractions(design):
+    """Where the seven height controls sit between the start and the crossing.
+
+    The stations are equal steps of inbound arc length. They do not follow the
+    transport waveform, so a change in ``(a, b)`` or the time gates does not
+    move them. The first fraction is the start and the last is the crossing.
+    """
+    del design
+    return np.linspace(0.0, 1.0, N_HEIGHT + 1)
+
+
+def inbound_height(design, fraction):
+    """Ion height on the way to the crossing.
+
+    ``fraction`` 0 is the start and is fixed at 50 um. The seven entries of
+    ``height_z`` sit at equal steps of inbound arc length, and the last one is
+    the crossing. The return trip uses the same function on the way back.
+    """
+    fraction = np.clip(np.asarray(fraction, dtype=float), 0.0, 1.0)
+    stations = height_fractions(design)
+    values = np.concatenate([
+        [ION_HEIGHT],
+        np.asarray(design.height_z, dtype=float).reshape(N_HEIGHT),
+    ])
+    return CubicSpline(stations, values, bc_type="natural")(fraction)
+
+
 def _round_trip_at(inbound, design, distance_dimless):
     """Points at dimensionless distances along the round trip."""
     total = 2.0 * inbound.length
     distance = np.asarray(distance_dimless, dtype=float)
     on_outbound = distance > inbound.length
-    xyz = inbound.points(np.where(on_outbound, total - distance, distance))
+    inbound_s = np.where(on_outbound, total - distance, distance)
+    xyz = inbound.points(inbound_s)
     xyz = np.array(xyz, copy=True)
     xyz[on_outbound, :2] = reflect_xy(xyz[on_outbound, :2])
+    if inbound.length > 0.0:
+        xyz[:, 2] = inbound_height(design, inbound_s / inbound.length)
     return xyz
 
 
@@ -300,6 +332,21 @@ def controls_stay_ordered(design):
     arm_ordered = np.all(np.diff(arm_polygon(design)[:, 0]) > 1e-4)
     bend_ordered = np.all(np.diff(control_polygon(design)[:, 0]) > 1e-4)
     return bool(arm_ordered and bend_ordered)
+
+
+def round_trip_arc(design, n=1201):
+    """Parameter distance and 3D arc length of one round trip.
+
+    Both arrays are dimensionless trap heights. Parameter 0 is the start and
+    half the parameter range is the crossing. The arc length includes the
+    height variation, so it is the distance drawn on the height plot.
+    """
+    inbound, _ctrl = make_inbound(design)
+    path = path_geometry(design, n=int(n))
+    step = np.linalg.norm(np.diff(path, axis=0), axis=1)
+    arc = np.concatenate([[0.0], np.cumsum(step)])
+    parameter = np.linspace(0.0, 2.0 * inbound.length, path.shape[0])
+    return parameter, arc
 
 
 def height_within_cap(design, n=241):

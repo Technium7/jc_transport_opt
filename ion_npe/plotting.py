@@ -10,12 +10,13 @@ from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-from .constants import ION_HEIGHT_M, L_SCALE, RF_SEP, RF_WIDTH, TRANSPORT_SPEED_M_S
+from .constants import ION_HEIGHT, ION_HEIGHT_M, L_SCALE, RF_SEP, RF_WIDTH, TRANSPORT_SPEED_M_S
 from .simulate import total_heating
 from .trajectory import (
     arm_polygon,
     control_polygon,
     dynamics_grid,
+    height_fractions,
     make_inbound,
     one_sided_time_gates,
     path_geometry,
@@ -305,89 +306,77 @@ def _height_profile(design):
 
 
 def _height_control_points(design):
-    """Arc length of each z control, on the way in and on the way back.
+    """Arc length of the seven height controls, inbound and on the return.
 
-    Distances are dimensionless trap heights. Heights are micrometres. The
-    start is repeated at the end of the round trip. The crossing is drawn once.
+    Distances are dimensionless 3D arc length, the same axis as the height
+    curve. Heights are micrometres. The start is fixed at 50 um and is
+    repeated at the end. The last control is the crossing and is drawn once,
+    at the path distance of the turnaround. The return copies the inbound
+    controls. Stations do not follow the transport waveform.
     """
-    arm = arm_polygon(design)
-    bend = control_polygon(design)
+    from .design import N_HEIGHT
+    from .trajectory import round_trip_arc
+
     inbound, _ctrl = make_inbound(design)
-    samples = np.linspace(0.0, inbound.length, 900)
-    pts = inbound.points(samples)
+    parameter, arc = round_trip_arc(design)
+    total = float(arc[-1])
 
-    def along(point):
-        delta = pts[:, :2] - np.asarray(point[:2], dtype=float)
-        return float(samples[int(np.argmin(np.einsum("ij,ij->i", delta, delta)))])
+    def at(parameter_s):
+        return float(np.interp(parameter_s, parameter, arc))
 
-    total = 2.0 * inbound.length
-    groups = {
-        "start": [arm[0]],
-        "arm": list(arm[2:-2]),
-        "end": list(bend[:2]) + list(bend[-2:-1]),
-        "bend": list(bend[2:-2]),
-        "cross": [bend[-1]],
-    }
-    placed = {}
-    for kind, points in groups.items():
-        distance = []
-        height = []
-        labels = []
-        for index, point in enumerate(points):
-            z_um = float(point[2]) * L_SCALE * 1e6
-            if kind == "start":
-                distance.extend([0.0, total])
-                height.extend([z_um, z_um])
-                labels.extend(["start", "end"])
-            elif kind == "cross":
-                distance.append(inbound.length)
-                height.append(z_um)
-                labels.append("cross")
-            else:
-                station = along(point)
-                distance.extend([station, total - station])
-                height.extend([z_um, z_um])
-                if kind == "arm":
-                    labels.extend(["a{}".format(index), ""])
-                elif kind == "bend":
-                    labels.extend(["c{}".format(index), ""])
-                else:
-                    labels.extend(["", ""])
-        placed[kind] = (
+    stations = height_fractions(design)
+    values = np.concatenate([[ION_HEIGHT], np.asarray(design.height_z, dtype=float)])
+    distance = []
+    height = []
+    labels = []
+    for index, (fraction, z_value) in enumerate(zip(stations, values)):
+        z_um = float(z_value) * L_SCALE * 1e6
+        if index == 0:
+            distance.extend([0.0, total])
+            height.extend([z_um, z_um])
+            labels.extend(["start", "end"])
+        elif index == N_HEIGHT:
+            distance.append(at(inbound.length))
+            height.append(z_um)
+            labels.append("h{}".format(index - 1))
+        else:
+            station = at(fraction * inbound.length)
+            distance.extend([station, at(2.0 * inbound.length - fraction * inbound.length)])
+            height.extend([z_um, z_um])
+            labels.extend(["h{}".format(index - 1), ""])
+    return {
+        "height": (
             np.asarray(distance, dtype=float),
             np.asarray(height, dtype=float),
             labels,
-        )
-    return placed
+        ),
+    }
 
 
 def _draw_height_controls(ax, design, scale):
-    """Mark z controls on a height-versus-distance axis.
+    """Mark the height controls on a height-versus-distance axis.
 
     ``scale`` converts a dimensionless arc length to the axis unit.
     """
-    marks = (
-        ("start", "D", "#333333", "start and end"),
-        ("arm", "^", "#54A24B", "arm controls"),
-        ("end", "s", "#333333", "bend ends"),
-        ("bend", "o", "#E45756", "bend controls"),
-        ("cross", "P", "#B279A2", "crossing"),
+    distance, height, labels = _height_control_points(design)["height"]
+    ax.scatter(
+        distance * scale, height, s=28, marker="o", color="#E45756",
+        zorder=4, label="height controls",
     )
-    placed = _height_control_points(design)
-    for kind, marker, color, label in marks:
-        distance, height, labels = placed[kind]
+    ends = np.array([text in ("start", "end") for text in labels])
+    if np.any(ends):
         ax.scatter(
-            distance * scale, height, s=28, marker=marker, color=color,
-            zorder=4, label=label,
+            distance[ends] * scale, height[ends], s=32, marker="D", color="#333333",
+            zorder=5, label="start and end",
         )
-        for station, z_um, text in zip(distance, height, labels):
-            if not text or text in ("start", "end", "cross"):
-                continue
-            ax.annotate(
-                text, (station * scale, z_um),
-                textcoords="offset points", xytext=(0, 5),
-                ha="center", fontsize=6, color=color,
-            )
+    for station, z_um, text in zip(distance, height, labels):
+        if not text or text in ("start", "end"):
+            continue
+        ax.annotate(
+            text, (station * scale, z_um),
+            textcoords="offset points", xytext=(0, 5),
+            ha="center", fontsize=6, color="#E45756",
+        )
 
 
 def plot_best_design(design, out, reference=None, total_quanta=None, title=None):
@@ -503,7 +492,10 @@ def plot_best_design(design, out, reference=None, total_quanta=None, title=None)
     bend.legend(frameon=False, fontsize=8, loc="upper left")
     if ref_speed is not None:
         right.plot(ref_distance * 1e6, ref_speed, color="#9a9a9a", ls="--", lw=1.2, label="nominal waveform")
-    right.plot(distance * 1e6, speed, color="#4C78A8", lw=1.6, label="optimized waveform")
+    right.plot(
+        distance * 1e6, speed, color="#4C78A8", lw=1.6,
+        label="waveform" if ref_speed is None else "optimized waveform",
+    )
     gate_speed = np.interp(gate_distance, distance, speed)
     right.scatter(gate_distance * 1e6, gate_speed, s=32, marker="D", facecolors="none", edgecolors="#333333", zorder=3, label="time gates")
     right.set_xlabel("distance along the path (μm)")
@@ -515,7 +507,10 @@ def plot_best_design(design, out, reference=None, total_quanta=None, title=None)
     if reference is not None:
         ref_height_distance, ref_height = _height_profile(reference)
         height.plot(ref_height_distance, ref_height, color="#9a9a9a", ls="--", lw=1.2, label="nominal")
-    height.plot(opt_distance, opt_height, color="#4C78A8", lw=1.6, label="optimized")
+    height.plot(
+        opt_distance, opt_height, color="#4C78A8", lw=1.6,
+        label="path" if reference is None else "optimized",
+    )
     height.axhline(ION_HEIGHT_M * 1e6, color="#333333", lw=0.7, ls=":", label="50 μm")
     _draw_height_controls(height, design, scale=L_SCALE * 1e6)
     height.set_xlabel("distance along the path (μm)")
