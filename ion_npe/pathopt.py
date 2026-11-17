@@ -1,4 +1,4 @@
-"""Trajectory search over the bend radius, the path height, and ``(a, b)``.
+"""Trajectory search over the bend radius and the path height.
 
 The junction stays at the developed design. Seven height controls run from
 the start to the crossing and stay within 15 um of 50 um. The start and the

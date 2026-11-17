@@ -1,12 +1,12 @@
 """One search over the junction, the trajectory, and the waveform.
 
-The training sample is a Gaussian. Its mean is the nominal design and each
-coordinate's variance is that of a uniform draw over the legal range, so the
-cloud sits on the developed path and still reaches the bounds. Cross-entropy
-rounds then simulate the designs the network ranks as coldest. Height along the arm and through the bend, including the
-crossing, stays within 15 um of 50 um. The start and the end stay at 50 um.
-The free trajectory coordinates are the bend radius, the seven height
-controls from the start to the crossing, and ``(a, b)``.
+The training sample is a Gaussian. Its mean is the center of each legal range
+and each coordinate's variance is that of a uniform draw over that range.
+Cross-entropy rounds then simulate the designs the network ranks as coldest.
+Height along the arm and through the bend, including the crossing, stays
+within 15 um of 50 um. The start and the end stay at 50 um. The free
+trajectory coordinates are the bend radius and the seven height controls.
+``(a, b)`` stays at ``(3, 1.5)``.
 The waveform coordinates are the four outbound gates. The center gate stays
 at 0, and the return half is their mirror.
 """
@@ -193,19 +193,25 @@ def _extend_joint(rows, quanta, totals, prepared, packed, limit, label, log_ever
     return rows, quanta, totals
 
 
+def _range_mean(lower, upper):
+    """Center of each legal interval. The Gaussian sample is drawn around this."""
+    lower = np.asarray(lower, dtype=float)
+    upper = np.asarray(upper, dtype=float)
+    return 0.5 * (lower + upper)
+
+
 def _gaussian_std(lower, upper):
     """Standard deviation of a uniform draw across each legal range.
 
-    The Gaussian mean is the nominal design. Its variance on coordinate ``i``
-    is ``(upper - lower) ** 2 / 12``, the variance of the uniform distribution
-    on that coordinate's legal interval.
+    The Gaussian mean is the center of each legal interval. Its variance on
+    coordinate ``i`` is ``(upper - lower) ** 2 / 12``.
     """
     span = np.asarray(upper, dtype=float) - np.asarray(lower, dtype=float)
     return span / np.sqrt(12.0)
 
 
 def _draw_gaussian(rng, n, mean, lower, upper, space):
-    """Admissible joint rows from the nominal Gaussian, clipped to the box."""
+    """Admissible joint rows from a Gaussian at ``mean``, clipped to the box."""
     mean = np.asarray(mean, dtype=float).reshape(-1)
     lower = np.asarray(lower, dtype=float)
     upper = np.asarray(upper, dtype=float)
@@ -231,7 +237,7 @@ def _draw_gaussian(rng, n, mean, lower, upper, space):
 
 
 def _collect_gaussian(rng, n, mean, lower, upper, space, simulate_kwargs):
-    """Simulate admissible draws from the nominal Gaussian until ``n`` succeed."""
+    """Simulate admissible Gaussian draws until ``n`` succeed."""
     from .farm import get_farm, width_for
 
     farm = get_farm()
@@ -259,7 +265,7 @@ def _noise_tag(amplitude):
 
 
 def collect_noise_sweep(out, amplitudes, n=1000, seed=0, simulate_kwargs=None):
-    """Simulate one nominal Gaussian sample at every stray-field amplitude.
+    """Simulate one range-centered Gaussian sample at every stray-field amplitude.
 
     The design rows are identical across amplitudes, so a later network can
     take the field strength as an input. Zero field uses one seed. A positive
@@ -287,12 +293,13 @@ def collect_noise_sweep(out, amplitudes, n=1000, seed=0, simulate_kwargs=None):
             )
         print("loaded {} shared designs from {}".format(len(rows), design_path), flush=True)
     else:
+        center = _range_mean(lower, upper)
         print(
-            "drawing {} gaussian designs, mean at the nominal design, "
-            "variance of each legal range".format(int(n)),
+            "drawing {} gaussian designs, mean at the center of each legal range, "
+            "variance of that range".format(int(n)),
             flush=True,
         )
-        varied = _draw_gaussian(rng, int(n), nominal, lower, upper, space)
+        varied = _draw_gaussian(rng, int(n), center, lower, upper, space)
         rows = np.vstack([nominal.reshape(1, -1), varied])
         np.savez(
             design_path,
@@ -644,9 +651,10 @@ def optimize_joint(
 ):
     """Train on the joint sample, then add CEM and active-learning simulations.
 
-    The training set is a Gaussian centered on the nominal design. Each
-    coordinate uses the variance of a uniform draw over its legal range, and
-    samples are clipped to that range. It is resimulated only when a saved
+    The training set is a Gaussian centered on the middle of each legal range.
+    Each coordinate uses the variance of a uniform draw over that range, and
+    samples are clipped to the range. ``(a, b)`` stays at ``(3, 1.5)``. It is
+    resimulated only when a saved
     sample of at least ``n`` designs is not already on disk. ``latin_scale``
     is accepted so older command lines still run; the Gaussian does not use
     it. Each CEM round draws an elite cloud and a neighborhood of the best
@@ -701,12 +709,12 @@ def optimize_joint(
                 total_parts.append(float(total_heating(wave_result.quanta)))
                 print("  heating {:.4g}".format(total_parts[-1]), flush=True)
         print(
-            "gaussian sample of {} designs, mean at the nominal design, "
-            "variance of each legal range".format(int(n)),
+            "gaussian sample of {} designs, mean at the center of each legal range, "
+            "variance of that range".format(int(n)),
             flush=True,
         )
         drawn, drawn_q, drawn_total = _collect_gaussian(
-            rng, int(n), nominal, lower, upper, space, simulate_kwargs,
+            rng, int(n), _range_mean(lower, upper), lower, upper, space, simulate_kwargs,
         )
         pieces.append(drawn)
         quanta_parts.append(drawn_q)
@@ -811,7 +819,7 @@ def optimize_joint(
         return float(np.min(totals[indices]))
 
     lines = [
-        "training set is a gaussian at the nominal design, variance of each legal range",
+        "training set is a gaussian at the center of each legal range, variance of that range",
         force_line(simulate_kwargs),
         stray_field_line(simulate_kwargs),
         heating_line(simulate_kwargs),

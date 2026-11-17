@@ -395,7 +395,7 @@ def main(argv=None):
     )
     _add_physics(joint)
     joint.add_argument("-o", "--out", type=str, default="outputs/joint")
-    joint.add_argument("-n", type=int, default=5000, help="Gaussian training designs, mean at the nominal design")
+    joint.add_argument("-n", type=int, default=5000, help="Gaussian training designs, mean at the center of each legal range")
     joint.add_argument("--iterations", type=int, default=6, help="cross-entropy rounds; each round adds simulations")
     joint.add_argument("--active", type=int, default=4, help="active-learning rounds after the cross-entropy rounds")
     joint.add_argument("--screen", type=int, default=256, help="candidate designs scored by the network each round")

@@ -38,7 +38,6 @@ class LocalNeighborhoodTests(unittest.TestCase):
             [
                 "cross_s",
                 "h0_z", "h1_z", "h2_z", "h3_z", "h4_z", "h5_z", "h6_z",
-                "curve_a", "curve_b",
             ],
         )
         self.assertTrue(any(name.endswith("_z") for name in space.names))
