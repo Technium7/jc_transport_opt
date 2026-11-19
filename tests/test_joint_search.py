@@ -6,7 +6,7 @@ import numpy as np
 
 from ion_npe.design import DesignSpace, expand_free_gates
 from ion_npe.joint import (
-    N_FREE_GATES, N_GATES, _bounds, _draw_gaussian, _gaussian_std, _latin_bounds, _range_mean,
+    N_FREE_GATES, N_GATES, _bounds, _draw_gaussian, _field_seed, _gaussian_std, _latin_bounds, _range_mean,
     _pick_lowest, _unpack, project_joint_row,
 )
 
@@ -69,6 +69,8 @@ class JointSearchTests(unittest.TestCase):
         mean = _range_mean(lower, upper)
         np.testing.assert_allclose(mean, 0.5 * (lower + upper))
         self.assertNotIn("curve_a", space.names)
+        self.assertNotEqual(_field_seed(0, 0.0), _field_seed(0, 0.1))
+        self.assertNotEqual(_field_seed(0, 0.1), _field_seed(0, 10.0))
         rows = _draw_gaussian(np.random.default_rng(0), 30, mean, lower, upper, space)
         self.assertEqual(rows.shape, (30, len(lower)))
         self.assertTrue(np.all(rows >= lower - 1e-12))

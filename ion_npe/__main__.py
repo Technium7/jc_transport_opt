@@ -423,7 +423,7 @@ def main(argv=None):
         type=float,
         nargs="+",
         default=[0.0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0],
-        help="stray-field amplitudes in V/m; the same designs are simulated at each. Zero uses one seed and a positive field uses 20",
+        help="stray-field amplitudes in V/m; each amplitude draws its own designs. Zero uses one seed and a positive field uses 20",
     )
     sweep.add_argument("--seed", type=int, default=0)
     sweep.set_defaults(func=_cmd_sweep)

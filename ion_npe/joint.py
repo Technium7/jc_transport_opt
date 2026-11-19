@@ -264,13 +264,17 @@ def _noise_tag(amplitude):
     return "{:.3g}".format(float(amplitude)).replace(".", "p").replace("-", "m")
 
 
-def collect_noise_sweep(out, amplitudes, n=1000, seed=0, simulate_kwargs=None):
-    """Simulate one range-centered Gaussian sample at every stray-field amplitude.
+def _field_seed(seed, amplitude):
+    """Stable seed for one amplitude. Different fields draw different designs."""
+    return int(seed) + int(round(float(amplitude) * 1e6))
 
-    The design rows are identical across amplitudes, so a later network can
-    take the field strength as an input. Zero field uses one seed. A positive
-    field uses 20 seeds. Each amplitude is saved as its own ``joint.npz`` and
-    is skipped when that file already matches this sample.
+
+def collect_noise_sweep(out, amplitudes, n=1000, seed=0, simulate_kwargs=None):
+    """Simulate a separate range-centered Gaussian sample at each stray field.
+
+    Each amplitude draws its own designs from the same distribution. Zero
+    field uses one seed. A positive field uses 20 seeds. A finished
+    ``joint.npz`` is kept.
     """
     from .farm import get_farm
 
@@ -282,41 +286,15 @@ def collect_noise_sweep(out, amplitudes, n=1000, seed=0, simulate_kwargs=None):
     space = DesignSpace()
     lower, upper = _bounds(space)
     nominal = np.concatenate([space.nominal(), np.zeros(N_FREE_GATES)])
-    rng = np.random.default_rng(seed)
-    design_path = out / "designs.npz"
-    if design_path.exists():
-        saved = np.load(design_path)
-        rows = np.asarray(saved["rows"], dtype=float)
-        if rows.shape != (int(n) + 1, len(lower)) or int(saved["seed"]) != int(seed):
-            raise RuntimeError(
-                "saved designs in {} do not match n={} seed={}".format(design_path, n, seed)
-            )
-        print("loaded {} shared designs from {}".format(len(rows), design_path), flush=True)
-    else:
-        center = _range_mean(lower, upper)
-        print(
-            "drawing {} gaussian designs, mean at the center of each legal range, "
-            "variance of that range".format(int(n)),
-            flush=True,
-        )
-        varied = _draw_gaussian(rng, int(n), center, lower, upper, space)
-        rows = np.vstack([nominal.reshape(1, -1), varied])
-        np.savez(
-            design_path,
-            rows=rows,
-            seed=np.int64(seed),
-            amplitudes=np.asarray(amplitudes, dtype=float),
-            lower=lower,
-            upper=upper,
-        )
-        print("saved {} shared designs".format(len(rows)), flush=True)
-
+    center = _range_mean(lower, upper)
     farm = get_farm()
     for amplitude in amplitudes:
         tag = _noise_tag(amplitude)
         folder = out / "noise_{}".format(tag)
         folder.mkdir(parents=True, exist_ok=True)
         cache = folder / "joint.npz"
+        design_path = folder / "designs.npz"
+        field_seed = _field_seed(seed, amplitude)
         kwargs = dict(simulate_kwargs or {})
         kwargs["noise_std_Vm"] = float(amplitude)
         kwargs = simulation_settings(kwargs)
@@ -324,12 +302,43 @@ def collect_noise_sweep(out, amplitudes, n=1000, seed=0, simulate_kwargs=None):
             data = np.load(cache)
             quanta = np.asarray(data["quanta"], dtype=float)
             if (
-                quanta.shape[0] == len(rows)
+                quanta.shape[0] == int(n) + 1
                 and quanta.shape[1] == len(kwargs["seeds"])
                 and float(data["noise_std_Vm"]) == float(amplitude)
             ):
                 print("keeping saved {:.4g} V/m sample".format(amplitude), flush=True)
                 continue
+        if design_path.exists():
+            saved = np.load(design_path)
+            rows = np.asarray(saved["rows"], dtype=float)
+            if rows.shape != (int(n) + 1, len(lower)) or int(saved["seed"]) != field_seed:
+                raise RuntimeError(
+                    "saved designs in {} do not match n={} seed={}".format(
+                        design_path, n, field_seed
+                    )
+                )
+            print(
+                "loaded {} designs for {:.4g} V/m".format(len(rows), amplitude),
+                flush=True,
+            )
+        else:
+            print(
+                "drawing {} gaussian designs for {:.4g} V/m, mean at the center of "
+                "each legal range".format(int(n), amplitude),
+                flush=True,
+            )
+            varied = _draw_gaussian(
+                np.random.default_rng(field_seed), int(n), center, lower, upper, space,
+            )
+            rows = np.vstack([nominal.reshape(1, -1), varied])
+            np.savez(
+                design_path,
+                rows=rows,
+                seed=np.int64(field_seed),
+                amplitude=np.float64(amplitude),
+                lower=lower,
+                upper=upper,
+            )
         print(
             "simulating {} designs at {:.4g} V/m, {} seeds".format(
                 len(rows), amplitude, len(kwargs["seeds"])
@@ -342,11 +351,14 @@ def collect_noise_sweep(out, amplitudes, n=1000, seed=0, simulate_kwargs=None):
         if cache.exists():
             data = np.load(cache)
             saved_q = np.asarray(data["quanta"], dtype=float)
+            saved_rows = np.asarray(data["rows"], dtype=float)
             if (
                 saved_q.ndim == 3
                 and saved_q.shape[1] == len(kwargs["seeds"])
                 and float(data["noise_std_Vm"]) == float(amplitude)
+                and saved_rows.shape[0] == saved_q.shape[0]
                 and saved_q.shape[0] <= len(rows)
+                and np.allclose(saved_rows, rows[:saved_rows.shape[0]])
             ):
                 done = int(saved_q.shape[0])
                 quanta_parts.append(saved_q)
