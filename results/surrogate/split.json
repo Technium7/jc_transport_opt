@@ -1,0 +1,17 @@
+{
+  "fingerprint": "8e66ea04bb399f5cb010d1edc69503512396ed62dc70d9fb6cdf21f2f6ca118f",
+  "holdout_fields": [
+    0.5,
+    2.0
+  ],
+  "n_train": 7632,
+  "n_val": 1638,
+  "n_test": 1638,
+  "n_interp": 3636,
+  "dropped_invalid": 1464,
+  "epochs": 30,
+  "patience": 8,
+  "legacy_epochs": 8,
+  "seed": 0,
+  "device": "cpu"
+}
