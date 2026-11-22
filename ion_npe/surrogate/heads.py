@@ -104,6 +104,13 @@ def gaussian_log_prob(y, mu, factor):
     return -0.5 * modes * math.log(2.0 * math.pi) - log_det - 0.5 * quad
 
 
+def mixture_log_density(logits, mu, factor, y):
+    """Joint log density of each row of ``y`` under the log-quanta mixture."""
+    log_pi = F.log_softmax(logits, dim=-1)
+    log_comp = gaussian_log_prob(y[:, :, None, :], mu[:, None, :, :], factor[:, None, :, :, :])
+    return torch.logsumexp(log_pi[:, None, :] + log_comp, dim=-1)
+
+
 def mixture_nll(logits, mu, factor, y, mask):
     """Mean over design-field pairs of the mean sample NLL. ``mask`` is ``(B, S)``."""
     log_pi = F.log_softmax(logits, dim=-1)

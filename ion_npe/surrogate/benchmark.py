@@ -15,6 +15,7 @@ from .evaluate import (
     fit_legacy,
     plot_coverage,
     plot_distributions,
+    plot_factorized_board,
     plot_field_errors,
     plot_prediction,
     plot_ranking,
@@ -26,11 +27,21 @@ from .model import EnsemblePredictor, SurrogateConfig, SurrogatePredictor, defau
 from .train import save_training, train_surrogate
 
 
+# name, encoder, head, mixture components, mean-loss weight, copula
+# The kept selector is transformer_gauss_lognorm. Its metrics and checkpoint
+# are results/surrogate_fieldshape.
 COMPARISONS = (
-    ("mlp_gaussian", "mlp", 1),
-    ("mlp_mixture", "mlp", 3),
-    ("transformer_gaussian", "transformer", 1),
-    ("transformer_mixture", "transformer", 3),
+    ("mlp_gaussian", "mlp", "log_mixture", 1, 0.0, False),
+    ("mlp_mixture", "mlp", "log_mixture", 3, 0.0, False),
+    ("transformer_gaussian", "transformer", "log_mixture", 1, 0.0, False),
+    ("transformer_mixture", "transformer", "log_mixture", 3, 0.0, False),
+    ("mlp_gauss_lognorm", "mlp", "gauss_lognorm", 1, 1.0, False),
+    ("transformer_gauss_lognorm", "transformer", "gauss_lognorm", 1, 1.0, False),
+    ("mlp_gauss_lognorm_l0", "mlp", "gauss_lognorm", 1, 0.0, False),
+    ("transformer_gauss_lognorm_l0", "transformer", "gauss_lognorm", 1, 0.0, False),
+    ("mlp_gamma", "mlp", "gamma", 1, 1.0, False),
+    ("transformer_gamma", "transformer", "gamma", 1, 1.0, False),
+    ("transformer_gauss_lognorm_copula", "transformer", "gauss_lognorm", 1, 1.0, True),
 )
 
 
@@ -46,6 +57,8 @@ def run_benchmark(
     legacy_epochs=12,
     ensemble=0,
     n_mc=96,
+    skip_existing=False,
+    names=None,
 ):
     """Fit the comparison models on one split and write metrics and plots."""
     out = Path(out)
@@ -64,9 +77,30 @@ def run_benchmark(
     summaries = []
     field_rows = []
     coverage_rows = []
-    for name, arch, components in COMPARISONS:
+    selected = COMPARISONS
+    if names is not None:
+        wanted = set(names)
+        selected = [row for row in COMPARISONS if row[0] in wanted]
+    for name, arch, head, components, lambda_mean, copula in selected:
+        saved_metrics = out / name / "test.json"
+        saved_weight = out / "{}.pt".format(name)
+        if skip_existing and saved_weight.is_file() and saved_metrics.is_file():
+            print("reusing {}".format(name), flush=True)
+            metrics = json.loads(saved_metrics.read_text())
+            interp_path = out / name / "interp.json"
+            interp = json.loads(interp_path.read_text()) if interp_path.is_file() else None
+            summaries.append({"name": name, "test": metrics, "interp": interp})
+            field_rows.append((name, metrics["by_field"]))
+            coverage_rows.append((name, metrics))
+            continue
         print("training {}".format(name), flush=True)
-        config = SurrogateConfig(arch=arch, n_components=components)
+        config = SurrogateConfig(
+            arch=arch,
+            head=head,
+            n_components=components,
+            lambda_mean=lambda_mean,
+            copula=copula,
+        )
         predictor = train_surrogate(
             split,
             config,
@@ -76,6 +110,7 @@ def run_benchmark(
             seed=seed,
             device=device,
             log_every=5,
+            shape_epochs=max(int(epochs) // 2, 1),
         )
         path = out / "{}.pt".format(name)
         save_training(path, predictor, split, predictor.history, epoch=len(predictor.history["train"]), best_score=predictor.best_score)
@@ -89,8 +124,11 @@ def run_benchmark(
         coverage_rows.append((name, metrics))
         if name == "transformer_mixture":
             _try_plot(lambda: _example_plots(predictor, table, split, out / name / "distributions.png", seed))
-    print("training original stochastic MLP", flush=True)
-    legacy = fit_legacy(split, epochs=legacy_epochs, seed=seed)
+    run_legacy = names is None or "legacy_stochastic" in set(names)
+    legacy = None
+    if run_legacy:
+        print("training original stochastic MLP", flush=True)
+        legacy = fit_legacy(split, epochs=legacy_epochs, seed=seed)
     if legacy is not None:
         legacy_metrics = evaluate_legacy(legacy, table, split.test, n_mc=min(n_mc, 32), rng=seed)
         save_metrics(out / "legacy_stochastic" / "test.json", legacy_metrics)
@@ -127,6 +165,7 @@ def run_benchmark(
         coverage_rows.append(("ensemble", ens_metrics))
     _try_plot(lambda: plot_field_errors(field_rows, out / "error_by_field.png"))
     _try_plot(lambda: plot_coverage(coverage_rows, out / "coverage.png"))
+    _try_plot(lambda: plot_factorized_board(out, data=data, holdout_fields=holdout_fields, seed=seed))
     (out / "comparison.json").write_text(json.dumps(summaries, indent=2))
     (out / "split.json").write_text(json.dumps({
         "fingerprint": table_fingerprint(table),
@@ -136,6 +175,9 @@ def run_benchmark(
         "n_test": int(len(split.test)),
         "n_interp": int(len(split.interp)),
         "dropped_invalid": int(table.info.get("n_dropped_invalid", 0)),
+        "epochs": int(epochs),
+        "patience": int(patience),
+        "mode_correlation": _mode_correlation(table),
     }, indent=2))
     return summaries
 
@@ -174,6 +216,24 @@ def _try_plot(draw):
         draw()
     except Exception as err:
         print("  plot skipped: {}".format(err), flush=True)
+
+
+def _mode_correlation(table):
+    """Mean within-design correlation of log quanta across the three modes."""
+    rows = []
+    for label in np.unique(np.round(table.sigma, 8)):
+        chosen = np.flatnonzero(np.round(table.sigma, 8) == label)
+        corrs = []
+        for index in chosen:
+            samples = table.quanta[index, table.valid[index]]
+            samples = samples[np.isfinite(samples).all(axis=-1) & (samples > 0).all(axis=-1)]
+            if samples.shape[0] < 8:
+                continue
+            corrs.append(np.corrcoef(np.log(samples).T))
+        if not corrs:
+            continue
+        rows.append({"sigma": float(label), "correlation": np.nanmean(corrs, axis=0).tolist()})
+    return rows
 
 
 def _example_plots(predictor, table, split, path, seed):

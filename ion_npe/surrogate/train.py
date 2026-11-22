@@ -1,9 +1,9 @@
 """AdamW training for the field-conditioned surrogates.
 
-The loss is the conditional mixture NLL of the observed final quanta. Each
-design-field pair is weighted equally, and realizations inside a pair are
+Each design-field pair is weighted equally, and realizations inside a pair are
 averaged. Field amplitudes are sampled in balance so the largest archive does
-not dominate the updates. L-BFGS is not applied.
+not dominate the updates. A factorized head then spends ``shape_epochs``
+updating only its field-only shape parameters. L-BFGS is not applied.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 from .data import field_sample_weights, quanta_to_log, split_payload
 from .layout import field_features, normalize_design
+from .factorized import factorized_objective
 from .heads import mixture_nll
 from .model import SurrogateNet, SurrogatePredictor, default_device
 from .torch_compat import tensor_to_numpy, to_tensor
@@ -43,16 +44,25 @@ def train_surrogate(
     grad_clip=1.0,
     log_every=5,
     resume=None,
+    shape_epochs=0,
 ):
-    """Fit one surrogate. Returns the predictor restored to its best validation weights."""
+    """Fit one surrogate. Returns the predictor restored to its best validation weights.
+
+    ``shape_epochs`` continues training with the mean head and the encoder
+    frozen, so the per-design cloud loss can move the shape after the mean
+    error has stopped deciding early stopping.
+    """
     if device is None:
         device = default_device()
     device = torch.device(device)
     set_seed(seed)
-    train_x, train_f, train_y, train_m, train_s = _pack(split, split.train, config)
+    train_x, train_f, train_y, train_m, train_raw, train_s = _pack(split, split.train, config)
     val_pack = _pack(split, split.val, config) if len(split.val) else None
     model = SurrogateNet(config).to(device)
-    model.head.set_mean_bias(_center_log(train_y, train_m))
+    if config.head == "log_mixture":
+        model.head.set_mean_bias(_center_log(train_y, train_m))
+    else:
+        model.mean_head.set_log_bias(_center_arith_log(train_raw, train_m))
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(lr), weight_decay=float(weight_decay))
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(int(epochs), 1))
     start = 0
@@ -72,7 +82,7 @@ def train_surrogate(
         generator=generator,
     )
     loader = DataLoader(
-        TensorDataset(train_x, train_f, train_y, train_m),
+        TensorDataset(train_x, train_f, train_y, train_m, train_raw, train_s),
         batch_size=min(int(batch_size), len(train_x)),
         sampler=sampler,
     )
@@ -80,14 +90,30 @@ def train_surrogate(
     for epoch in range(start, int(epochs)):
         model.train()
         losses = []
-        for design, field, target, mask in loader:
+        for design, field, target, mask, raw, sigma in loader:
             design = design.to(device)
             field = field.to(device)
             target = target.to(device)
             mask = mask.to(device)
+            raw = raw.to(device)
+            sigma = sigma.to(device)
             optimizer.zero_grad(set_to_none=True)
-            logits, mu, factor = model(design, field)
-            loss, _per = mixture_nll(logits, mu, factor, target, mask)
+            pred = model(design, field)
+            if config.head == "log_mixture":
+                loss, _per = mixture_nll(pred[0], pred[1], pred[2], target, mask)
+            else:
+                loss, _per = factorized_objective(
+                    pred,
+                    raw,
+                    mask,
+                    sigma,
+                    config.lambda_mean,
+                    lambda_typical=config.lambda_typical,
+                    lambda_scale=config.lambda_scale,
+                    lambda_rank=config.lambda_rank,
+                    lambda_shape=config.lambda_shape,
+                    lambda_cloud=config.lambda_cloud,
+                )
             if not torch.isfinite(loss):
                 raise RuntimeError("training loss became non-finite at epoch {}".format(epoch))
             loss.backward()
@@ -117,6 +143,24 @@ def train_surrogate(
         if patience and stalled >= int(patience) and epoch + 1 < int(epochs):
             print("  early stop at epoch {}".format(epoch), flush=True)
             break
+    if int(shape_epochs) > 0 and config.head != "log_mixture":
+        model.load_state_dict(best_state)
+        best_score, best_state, history = _fit_shape(
+            model,
+            loader,
+            val_pack,
+            device,
+            history,
+            best_score,
+            best_state,
+            epochs=int(shape_epochs),
+            lr=float(lr) * 0.5,
+            weight_decay=float(weight_decay),
+            patience=patience,
+            grad_clip=grad_clip,
+            log_every=log_every,
+            start_epoch=len(history["train"]),
+        )
     model.load_state_dict(best_state)
     model.to(device)
     predictor = SurrogatePredictor(model, split.table.lower, split.table.upper, config.e_ref, config.log_eps, device)
@@ -142,6 +186,91 @@ def save_training(path, predictor, split, history, optimizer=None, epoch=0, best
     return path
 
 
+def _fit_shape(
+    model,
+    loader,
+    val_pack,
+    device,
+    history,
+    best_score,
+    best_state,
+    epochs,
+    lr,
+    weight_decay,
+    patience,
+    grad_clip,
+    log_every,
+    start_epoch,
+):
+    """Train the shape head with the encoder and the mean held fixed."""
+    for parameter in model.parameters():
+        parameter.requires_grad_(False)
+    for parameter in model.shape_head.parameters():
+        parameter.requires_grad_(True)
+    optimizer = torch.optim.AdamW(
+        (parameter for parameter in model.shape_head.parameters() if parameter.requires_grad),
+        lr=float(lr),
+        weight_decay=float(weight_decay),
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(int(epochs), 1))
+    stalled = 0
+    config = model.config
+    for step in range(int(epochs)):
+        model.eval()
+        model.shape_head.train()
+        losses = []
+        for design, field, _target, mask, raw, sigma in loader:
+            optimizer.zero_grad(set_to_none=True)
+            pred = model(design.to(device), field.to(device))
+            loss, _per = factorized_objective(
+                pred,
+                raw.to(device),
+                mask.to(device),
+                sigma.to(device),
+                config.lambda_mean,
+                lambda_typical=config.lambda_typical,
+                lambda_scale=config.lambda_scale,
+                lambda_rank=config.lambda_rank,
+                lambda_shape=config.lambda_shape,
+                lambda_cloud=config.lambda_cloud,
+            )
+            if not torch.isfinite(loss):
+                raise RuntimeError("shape-stage loss became non-finite")
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.shape_head.parameters(), float(grad_clip))
+            optimizer.step()
+            losses.append(float(loss.detach().cpu()))
+        scheduler.step()
+        train_loss = float(np.mean(losses)) if losses else float("nan")
+        history["train"].append(train_loss)
+        score = train_loss if val_pack is None else _balanced_nll(model, val_pack, device)
+        history["val"].append(float("nan") if val_pack is None else float(score))
+        if score < best_score - 1e-6:
+            best_score = float(score)
+            best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            stalled = 0
+        else:
+            stalled += 1
+        epoch = start_epoch + step
+        if log_every and (step % int(log_every) == 0 or step == int(epochs) - 1):
+            print(
+                "  shape {:4d}  train {:.4g}  val {:.4g}".format(epoch, train_loss, history["val"][-1]),
+                flush=True,
+            )
+        if patience and stalled >= int(patience) and step + 1 < int(epochs):
+            print("  shape early stop at epoch {}".format(epoch), flush=True)
+            break
+    for parameter in model.parameters():
+        parameter.requires_grad_(True)
+    return best_score, best_state, history
+
+
+def _raw_quanta(split, indices):
+    indices = np.asarray(indices, dtype=int)
+    raw = np.asarray(split.table.quanta[indices], dtype=np.float64)
+    return np.nan_to_num(raw, nan=0.0).astype(np.float32)
+
+
 def _pack(split, indices, config):
     table = split.table
     indices = np.asarray(indices, dtype=int)
@@ -150,11 +279,13 @@ def _pack(split, indices, config):
     target = np.nan_to_num(quanta_to_log(table.quanta[indices], config.log_eps), nan=0.0).astype(np.float32)
     mask = np.asarray(table.valid[indices], dtype=np.bool_)
     sigma = np.asarray(table.sigma[indices], dtype=np.float64)
+    raw = _raw_quanta(split, indices)
     return (
         to_tensor(design, dtype=torch.float32),
         to_tensor(field, dtype=torch.float32),
         to_tensor(target, dtype=torch.float32),
         to_tensor(mask, dtype=torch.bool),
+        to_tensor(raw, dtype=torch.float32),
         to_tensor(sigma, dtype=torch.float64),
     )
 
@@ -168,15 +299,44 @@ def _center_log(target, mask):
     return np.median(picked.reshape(-1, 3), axis=0)
 
 
+def _center_arith_log(raw, mask):
+    values = tensor_to_numpy(raw)
+    valid = tensor_to_numpy(mask)
+    counted = np.maximum(valid.sum(axis=1, keepdims=True), 1)
+    means = np.where(valid[..., None], values, 0.0).sum(axis=1) / counted
+    positive = means[means.mean(axis=1) > 0]
+    if positive.size == 0:
+        return np.zeros(3, dtype=np.float64)
+    return np.log(np.maximum(np.median(positive, axis=0), 1e-30))
+
+
 def _balanced_nll(model, pack, device):
     model.eval()
-    design, field, target, mask, sigma = pack
+    design, field, target, mask, raw, sigma = pack
     with torch.no_grad():
-        logits, mu, factor = model(design.to(device), field.to(device))
-        _loss, per_pair = mixture_nll(logits, mu, factor, target.to(device), mask.to(device))
+        pred = model(design.to(device), field.to(device))
+        if model.config.head == "log_mixture":
+            _loss, per_pair = mixture_nll(pred[0], pred[1], pred[2], target.to(device), mask.to(device))
+        else:
+            loss, per_pair = factorized_objective(
+                pred,
+                raw.to(device),
+                mask.to(device),
+                sigma.to(device),
+                model.config.lambda_mean,
+                lambda_typical=model.config.lambda_typical,
+                lambda_scale=model.config.lambda_scale,
+                lambda_rank=model.config.lambda_rank,
+                lambda_shape=model.config.lambda_shape,
+                lambda_cloud=model.config.lambda_cloud,
+            )
     scores = tensor_to_numpy(per_pair.detach().cpu())
     labels = np.round(tensor_to_numpy(sigma), 8)
     keep = tensor_to_numpy(mask).any(axis=1)
+    rank_term = 0.0
+    if model.config.head != "log_mixture":
+        pair_mean = float(scores[keep].mean()) if np.any(keep) else 0.0
+        rank_term = float(loss.detach().cpu()) - pair_mean
     total = 0.0
     count = 0
     for label in np.unique(labels):
@@ -188,7 +348,7 @@ def _balanced_nll(model, pack, device):
     model.train()
     if count == 0:
         return float("nan")
-    return total / count
+    return total / count + rank_term
 
 
 def _resume(path, model, optimizer, scheduler, device):

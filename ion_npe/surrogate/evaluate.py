@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 
-from .layout import quanta_to_log
+from .layout import log_to_quanta, quanta_to_log
 
 
 def evaluate_predictor(
@@ -32,7 +33,8 @@ def evaluate_predictor(
     per_nll = predictor.negative_log_likelihood(design, sigma, quanta, valid)
     keep = valid.any(axis=1)
     per_nll = np.where(keep, per_nll, np.nan)
-    samples = predictor.sample_log(design, sigma, n_samples=int(n_mc), rng=rng)
+    samples = predictor.sample_log(design, sigma, n_samples=int(n_mc), rng=rng, include_mean_uncertainty=True)
+    cloud = predictor.sample_log(design, sigma, n_samples=int(n_mc), rng=rng + 1, include_mean_uncertainty=False)
     expected = predictor.expected_total(design, sigma)
     true_total = _true_total(quanta, valid)
     metrics = {
@@ -55,6 +57,24 @@ def evaluate_predictor(
         "extreme": _subset_metrics(true_total >= float(extreme_total), keep, pred_log_mean, true_log_mean, expected, true_total),
     }
     metrics["ranking"] = rank_metrics(sigma[keep], expected[keep], true_total[keep], k=ranking_k)
+    obs_arith = _masked_mean(quanta, valid)
+    pred_arith = np.asarray(predictor.arithmetic_mean(design, sigma), dtype=np.float64)
+    metrics["arith_log_rmse"] = _rmse(
+        np.log10(np.maximum(pred_arith[keep], 1e-30)),
+        np.log10(np.maximum(obs_arith[keep], 1e-30)),
+    )
+    metrics["arith_log_mae"] = _mae(
+        np.log10(np.maximum(pred_arith[keep], 1e-30)),
+        np.log10(np.maximum(obs_arith[keep], 1e-30)),
+    )
+    linear_nll = predictor.linear_negative_log_likelihood(design, sigma, quanta, valid)
+    metrics["linear_nll"] = _nanmean(np.where(keep, linear_nll, np.nan))
+    linear_samples = log_to_quanta(cloud, predictor.log_eps)
+    ratio_cv = predictor.ratio_cv(design, sigma) if hasattr(predictor, "ratio_cv") else None
+    metrics["shape"] = _shape_report(linear_samples, quanta, valid, sigma, keep, ratio_cv)
+    metrics["tail"] = _tail_report(linear_samples, quanta, valid, keep)
+    metrics["transition"] = _transition(predictor, design, sigma, keep)
+    metrics["arith_by_field"] = _arith_by_field(sigma, keep, pred_arith, obs_arith, linear_nll)
     metrics["curves"] = {
         "sigma": sigma,
         "true_log_mean": true_log_mean,
@@ -437,6 +457,120 @@ def _subset_metrics(regime, keep, pred, true, expected, truth_total):
     }
 
 
+def _cloud_stats(cloud):
+    stats = []
+    for mode in range(cloud.shape[-1]):
+        values = np.asarray(cloud[..., mode], dtype=np.float64)
+        values = values[np.isfinite(values) & (values > 0.0)]
+        if (
+            values.size < 2
+            or not np.isfinite(values.mean())
+            or values.mean() <= 0.0
+            or values.std() <= 1e-8 * max(abs(float(values.mean())), 1.0)
+        ):
+            stats.append((float("nan"), float("nan"), float("nan")))
+            continue
+        centered = (values - values.mean()) / values.std()
+        stats.append((
+            float(values.std() / values.mean()),
+            float(np.mean(values < values.mean())),
+            float(np.mean(centered ** 3)),
+        ))
+    return stats
+
+
+def _shape_report(samples, quanta, valid, sigma, keep, ratio_cv=None):
+    """Predicted and observed coefficient of variation, skew, and mass below the mean."""
+    rows = []
+    for label in np.unique(np.round(sigma, 8)):
+        chosen = np.flatnonzero(keep & (np.round(sigma, 8) == label))
+        if chosen.size == 0:
+            continue
+        observed = [[] for _ in range(3)]
+        predicted = [[] for _ in range(3)]
+        for index in chosen:
+            for mode, (cv, frac, skew) in enumerate(_cloud_stats(quanta[index, valid[index]])):
+                observed[mode].append((cv, frac, skew))
+            for mode, (cv, frac, skew) in enumerate(_cloud_stats(samples[:, index, :])):
+                predicted[mode].append((cv, frac, skew))
+        entry = {"sigma": float(label), "n": int(chosen.size), "modes": []}
+        for mode in range(3):
+            obs = np.asarray(observed[mode], dtype=np.float64)
+            pred = np.asarray(predicted[mode], dtype=np.float64)
+            entry["modes"].append({
+                "mode": mode,
+                "obs_cv": _finite_median(obs[:, 0]) if obs.size else float("nan"),
+                "pred_cv": _finite_median(pred[:, 0]) if pred.size else float("nan"),
+                "obs_frac_below": _finite_median(obs[:, 1]) if obs.size else float("nan"),
+                "pred_frac_below": _finite_median(pred[:, 1]) if pred.size else float("nan"),
+                "obs_skew": _finite_median(obs[:, 2]) if obs.size else float("nan"),
+                "pred_skew": _finite_median(pred[:, 2]) if pred.size else float("nan"),
+                "ratio_cv": _finite_median(np.asarray(ratio_cv)[chosen, mode]) if ratio_cv is not None else None,
+            })
+        rows.append(entry)
+    return rows
+
+
+def _tail_report(samples, quanta, valid, keep):
+    """Log error of the 0.9 total quantile and of CVaR at 0.9."""
+    pred_total = np.sum(samples, axis=-1)
+    pred_q = np.quantile(pred_total, 0.9, axis=0)
+    level = pred_q
+    tail = pred_total >= level[None, :]
+    pred_cvar = np.sum(np.where(tail, pred_total, 0.0), axis=0) / np.maximum(tail.sum(axis=0), 1)
+    true_q = np.full(len(valid), np.nan)
+    true_cvar = np.full(len(valid), np.nan)
+    for index in np.flatnonzero(keep):
+        observed = np.sum(quanta[index, valid[index]], axis=-1)
+        observed = observed[np.isfinite(observed)]
+        if observed.size == 0:
+            continue
+        cutoff = np.quantile(observed, 0.9)
+        true_q[index] = cutoff
+        upper = observed[observed >= cutoff]
+        true_cvar[index] = float(upper.mean()) if upper.size else float("nan")
+    chosen = keep & np.isfinite(true_q) & np.isfinite(pred_q)
+    return {
+        "q90_log_mae": _mae(np.log10(np.maximum(pred_q[chosen], 1e-30)), np.log10(np.maximum(true_q[chosen], 1e-30))),
+        "cvar90_log_mae": _mae(
+            np.log10(np.maximum(pred_cvar[chosen], 1e-30)),
+            np.log10(np.maximum(true_cvar[chosen], 1e-30)),
+        ),
+    }
+
+
+def _transition(predictor, design, sigma, keep):
+    if not hasattr(predictor, "shape_parameters"):
+        return None
+    shape = predictor.shape_parameters(design, sigma)
+    if shape is None:
+        return None
+    rows = []
+    for label in np.unique(np.round(sigma, 8)):
+        chosen = keep & (np.round(sigma, 8) == label)
+        if not np.any(chosen):
+            continue
+        row = {"sigma": float(label)}
+        for key, value in shape.items():
+            row[key] = np.median(np.asarray(value)[chosen], axis=0).tolist()
+        rows.append(row)
+    return rows
+
+
+def _arith_by_field(sigma, keep, pred, obs, nll):
+    rows = []
+    for label in np.unique(np.round(sigma, 8)):
+        chosen = keep & (np.round(sigma, 8) == label)
+        if not np.any(chosen):
+            continue
+        rows.append({
+            "sigma": float(label),
+            "arith_log_rmse": _rmse(np.log10(np.maximum(pred[chosen], 1e-30)), np.log10(np.maximum(obs[chosen], 1e-30))),
+            "linear_nll": _nanmean(nll[chosen]),
+        })
+    return rows
+
+
 def _rmse(pred, true):
     if pred.size == 0 or not np.isfinite(true).any():
         return float("nan")
@@ -462,6 +596,13 @@ def _nanmean(values):
     return float(np.nanmean(values))
 
 
+def _finite_median(values):
+    values = np.asarray(values, dtype=np.float64)
+    if values.size == 0 or not np.isfinite(values).any():
+        return float("nan")
+    return float(np.nanmedian(values))
+
+
 def _spearman(left, right):
     from scipy.stats import spearmanr
 
@@ -469,6 +610,273 @@ def _spearman(left, right):
         return float("nan")
     coef, _p = spearmanr(left, right)
     return float(coef)
+
+
+def plot_factorized_board(out, data=None, holdout_fields=(0.5, 2.0), seed=0):
+    """Comparison figures for a finished factorized benchmark directory."""
+    import json
+    import matplotlib
+    matplotlib.use("Agg", force=False)
+    import matplotlib.pyplot as plt
+
+    out = Path(out)
+    reports = {}
+    for path in sorted(out.glob("*/test.json")):
+        name = path.parent.name
+        reports[name] = {
+            "test": json.loads(path.read_text()),
+            "interp": json.loads((path.parent / "interp.json").read_text()) if (path.parent / "interp.json").is_file() else None,
+        }
+    if not reports:
+        return
+    _plot_arith_and_rank(reports, out, plt)
+    _plot_transition(reports, out, plt)
+    _plot_cv(reports, out, plt)
+    if data is not None:
+        _plot_mode_distributions(reports, out, data, holdout_fields, seed, plt)
+
+
+def _plot_arith_and_rank(reports, out, plt):
+    names = [name for name in _BOARD_MODELS if name in reports]
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.2), sharey=True)
+    for ax, split, title in (
+        (axes[0], "test", "unseen designs, trained fields"),
+        (axes[1], "interp", "seen designs, held-out fields"),
+    ):
+        for name in names:
+            rows = (reports[name].get(split) or {}).get("arith_by_field")
+            if not rows:
+                continue
+            ax.plot(
+                [row["sigma"] for row in rows],
+                [row["arith_log_rmse"] for row in rows],
+                marker="o",
+                ms=4,
+                color=_BOARD_COLORS[name],
+                label=name,
+            )
+        ax.set_xscale("symlog", linthresh=0.05)
+        ax.set_xlabel("stray field (V/m)")
+        ax.set_title(title)
+        ax.set_ylabel("log10 RMSE of arithmetic mean")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.02), ncol=2, frameon=False, fontsize=7)
+    fig.tight_layout()
+    fig.savefig(out / "arith_error_by_field.png", dpi=140, bbox_inches="tight")
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.2))
+    for name in names:
+        rows = reports[name]["test"].get("ranking") or []
+        if not rows:
+            continue
+        axes[0].plot(
+            [row["sigma"] for row in rows],
+            [row["spearman_log"] for row in rows],
+            marker="o",
+            ms=4,
+            color=_BOARD_COLORS[name],
+            label=name,
+        )
+        axes[1].plot(
+            [row["sigma"] for row in rows],
+            [row["log10_regret"] for row in rows],
+            marker="o",
+            ms=4,
+            color=_BOARD_COLORS[name],
+            label=name,
+        )
+    axes[0].set_ylabel("Spearman of log10 total heating")
+    axes[1].set_ylabel("log10 regret of the selected design")
+    for ax in axes:
+        ax.set_xscale("symlog", linthresh=0.05)
+        ax.set_xlabel("stray field (V/m)")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.02), ncol=2, frameon=False, fontsize=7)
+    fig.tight_layout()
+    fig.savefig(out / "ranking_by_field.png", dpi=140, bbox_inches="tight")
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(8.6, 3.8))
+    x = np.arange(len(names))
+    cover_50 = [reports[name]["test"].get("coverage_50") or 0.0 for name in names]
+    cover_90 = [reports[name]["test"].get("coverage_90") or 0.0 for name in names]
+    ax.bar(x - 0.16, cover_50, width=0.32, label="50% interval", color="#1f4e79")
+    ax.bar(x + 0.16, cover_90, width=0.32, label="90% interval", color="#7aa6c2")
+    ax.axhline(0.50, color="#1f4e79", lw=0.8, ls="--")
+    ax.axhline(0.90, color="#7aa6c2", lw=0.8, ls="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, rotation=25, ha="right")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("coverage on held-out designs")
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out / "coverage.png", dpi=140)
+    plt.close(fig)
+
+
+def _plot_transition(reports, out, plt):
+    names = [name for name in ("mlp_gauss_lognorm", "transformer_gauss_lognorm", "transformer_gauss_lognorm_l0") if name in reports]
+    if not names:
+        return
+    fig, axes = plt.subplots(1, 3, figsize=(11.2, 3.8), sharex=True)
+    mode_style = ("-", "--", ":")
+    for name in names:
+        rows = reports[name]["test"].get("transition") or []
+        rows = [row for row in rows if "gaussian_scale" in row]
+        if not rows:
+            continue
+        sigma = [row["sigma"] for row in rows]
+        for mode in range(3):
+            label = name if mode == 0 else None
+            axes[0].plot(sigma, [row["gaussian_scale"][mode] for row in rows], mode_style[mode], color=_BOARD_COLORS[name], label=label)
+            axes[1].plot(sigma, [row["lognormal_scale"][mode] for row in rows], mode_style[mode], color=_BOARD_COLORS[name], label=label)
+            axes[2].plot(sigma, [row["lognormal_weight"][mode] for row in rows], mode_style[mode], color=_BOARD_COLORS[name], label=label)
+    axes[0].set_ylabel("Gaussian scale")
+    axes[1].set_ylabel("lognormal scale")
+    axes[2].set_ylabel("lognormal weight")
+    axes[2].set_ylim(0.0, 1.0)
+    for ax in axes:
+        ax.set_xscale("symlog", linthresh=0.05)
+        ax.set_xlabel("stray field (V/m)")
+    axes[0].legend(frameon=False, fontsize=7)
+    fig.suptitle("learned ratio parameters (solid tangent, dashed normal, dotted vertical)", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(out / "transition.png", dpi=140)
+    plt.close(fig)
+
+
+def _mode_cv(mode):
+    if mode.get("ratio_cv") is not None:
+        return mode["ratio_cv"]
+    return mode["pred_cv"]
+
+
+def _plot_cv(reports, out, plt):
+    target = reports.get("transformer_gauss_lognorm")
+    if target is None:
+        return
+    fig, ax = plt.subplots(figsize=(6.6, 4.0))
+    rows = [row for row in target["test"]["shape"] if row["sigma"] > 0.0]
+    ax.plot([row["sigma"] for row in rows], [row["modes"][0]["obs_cv"] for row in rows], color="#222222", marker="o", label="observed tangent")
+    for name, mode_label in (
+        ("transformer_gauss_lognorm", "transformer Gauss–lognormal"),
+        ("mlp_gauss_lognorm", "MLP Gauss–lognormal"),
+        ("transformer_mixture", "transformer log-mixture"),
+    ):
+        block = reports.get(name)
+        if block is None:
+            continue
+        series = [row for row in block["test"]["shape"] if row["sigma"] > 0.0]
+        ax.plot(
+            [row["sigma"] for row in series],
+            [_mode_cv(row["modes"][0]) for row in series],
+            marker="o",
+            color=_BOARD_COLORS[name],
+            label=mode_label,
+        )
+    ax.set_xscale("symlog", linthresh=0.05)
+    ax.set_xlabel("stray field (V/m)")
+    ax.set_ylabel("coefficient of variation")
+    ax.set_title("tangent mode, held-out designs")
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out / "cv_by_field.png", dpi=140)
+    plt.close(fig)
+
+
+def _plot_mode_distributions(reports, out, data, holdout_fields, seed, plt):
+    from scipy.special import ndtr
+
+    from .data import load_field_data, make_split
+
+    learned = (reports.get("transformer_gauss_lognorm") or {}).get("test", {}).get("transition")
+    if not learned:
+        return
+    table = load_field_data(data)
+    split = make_split(table, holdout_fields=holdout_fields, seed=seed)
+    fields = (0.1, 1.0, 10.0)
+    mode_names = ("tangent", "normal", "vertical")
+    fig, axes = plt.subplots(len(fields), 3, figsize=(10.2, 7.6), sharex=True)
+    grid = np.logspace(-2.0, 1.2, 500)
+    bins = np.logspace(-2.0, 1.2, 28)
+    for row, sigma in enumerate(fields):
+        params = min(learned, key=lambda item: abs(item["sigma"] - sigma))
+        chosen = [int(index) for index in split.test if abs(float(table.sigma[index]) - sigma) < 1e-8]
+        for mode in range(3):
+            ratios = []
+            for index in chosen:
+                values = table.quanta[index, table.valid[index], mode]
+                values = values[np.isfinite(values) & (values > 0.0)]
+                if values.size < 2 or values.mean() <= 0.0:
+                    continue
+                ratios.append(values / values.mean())
+            cloud = np.concatenate(ratios) if ratios else np.zeros(0)
+            ax = axes[row, mode]
+            if cloud.size:
+                ax.hist(cloud, bins=bins, density=True, color="#c5d4e4", label="observed n / mean")
+            pdf = _mixture_pdf(
+                grid,
+                params["gaussian_scale"][mode],
+                params["lognormal_scale"][mode],
+                params["lognormal_weight"][mode],
+                ndtr,
+            )
+            ax.plot(grid, pdf, color="#1f4e79", lw=1.6, label="learned mixture")
+            ax.set_xscale("log")
+            ax.set_xlim(1e-2, 10.0 ** 1.2)
+            if row == len(fields) - 1:
+                ax.set_xlabel("phonon / design mean")
+            if row == 0:
+                ax.set_title(mode_names[mode])
+            if mode == 0:
+                ax.set_ylabel("{} V/m".format(sigma))
+            if row == 0 and mode == 2:
+                ax.legend(frameon=False, fontsize=7)
+    fig.suptitle("within-design ratio and the median learned mixture", fontsize=12)
+    fig.tight_layout()
+    fig.savefig(out / "mode_distributions.png", dpi=140)
+    plt.close(fig)
+
+
+def _mixture_pdf(ratio, gaussian_scale, lognormal_scale, weight, ndtr):
+    z = 1.0 / gaussian_scale
+    mass = float(ndtr(z))
+    phi = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
+    mean_x = 1.0 + gaussian_scale * (phi / max(mass, 1e-30))
+    x = ratio * mean_x
+    gauss = np.exp(-0.5 * ((x - 1.0) / gaussian_scale) ** 2) / (
+        gaussian_scale * math.sqrt(2.0 * math.pi) * max(mass, 1e-30)
+    ) * mean_x
+    mu = -0.5 * lognormal_scale ** 2
+    safe = np.maximum(ratio, 1e-300)
+    lognorm = np.exp(-0.5 * ((np.log(safe) - mu) / lognormal_scale) ** 2) / (
+        safe * lognormal_scale * math.sqrt(2.0 * math.pi)
+    )
+    return np.where(ratio > 0.0, (1.0 - weight) * gauss + weight * lognorm, 0.0)
+
+
+_BOARD_MODELS = (
+    "mlp_mixture",
+    "transformer_mixture",
+    "mlp_gauss_lognorm",
+    "transformer_gauss_lognorm",
+    "transformer_gauss_lognorm_l0",
+    "transformer_gauss_lognorm_copula",
+    "transformer_gamma",
+    "legacy_stochastic",
+)
+
+_BOARD_COLORS = {
+    "mlp_mixture": "#8d6a9f",
+    "transformer_mixture": "#5c4d7a",
+    "mlp_gauss_lognorm": "#d4762c",
+    "transformer_gauss_lognorm": "#1f4e79",
+    "transformer_gauss_lognorm_l0": "#3d8b8b",
+    "transformer_gauss_lognorm_copula": "#1a7a3a",
+    "transformer_gamma": "#a33b3b",
+    "legacy_stochastic": "#666666",
+}
 
 
 def _jsonify(value):
