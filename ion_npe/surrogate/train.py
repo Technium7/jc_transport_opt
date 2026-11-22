@@ -182,12 +182,11 @@ def train_shape_model(
     grad_clip=1.0,
     log_every=5,
 ):
-    """Fit ``p(R | sigma)`` from normalized seeds. The design is not an input.
+    """Fit ``p(R | design, sigma)`` from normalized seeds.
 
-    Each design-field pair has equal weight inside the loss, and field
-    amplitudes are sampled in balance, so a pair with more seeds or a crowded
-    amplitude does not dominate. Zero field is left out: the samples sit on
-    the mean and the ratio density is not defined.
+    The mean network is not in the graph. Each design-field pair has equal
+    weight, and field amplitudes are sampled in balance. Zero field is left
+    out: the samples sit on the mean and the ratio density is not defined.
     """
     if config.head not in ("gauss_lognorm", "gamma"):
         raise ValueError("train_shape_model needs gauss_lognorm or gamma")
@@ -212,10 +211,10 @@ def train_shape_model(
         grad_clip,
         log_every,
         lambda step_model, batch: shape_objective(
-            step_model(batch[0].to(device)),
-            batch[1].to(device),
+            step_model(batch[0].to(device), batch[1].to(device)),
             batch[2].to(device),
             batch[3].to(device),
+            batch[4].to(device),
             lambda_shape=config.lambda_shape,
             lambda_cloud=config.lambda_cloud,
             lambda_quantile=config.lambda_quantile,
@@ -223,7 +222,7 @@ def train_shape_model(
         _shape_val_score,
     )
     model.load_state_dict(best_state)
-    predictor = ShapePredictor(model, config.e_ref, device)
+    predictor = ShapePredictor(model, split.table.lower, split.table.upper, config.e_ref, device)
     predictor.history = history
     predictor.best_score = best_score
     return predictor
@@ -420,11 +419,11 @@ def _fit_independent(
 
 def _shape_val_score(model, pack, device):
     model.eval()
-    field, raw, mask, sigma = pack
+    design, field, raw, mask, sigma = pack
     config = model.config
     with torch.no_grad():
         _loss, per_pair = shape_objective(
-            model(field.to(device)),
+            model(design.to(device), field.to(device)),
             raw.to(device),
             mask.to(device),
             sigma.to(device),
@@ -491,7 +490,7 @@ def _balanced_loader(tensors, sigma, batch_size, seed):
 
 
 def _shape_loader(pack, batch_size, seed):
-    return _balanced_loader(pack, pack[3], batch_size, seed)
+    return _balanced_loader(pack, pack[4], batch_size, seed)
 
 
 def _mean_loader(pack, batch_size, seed):
@@ -499,14 +498,7 @@ def _mean_loader(pack, batch_size, seed):
 
 
 def _pack_shape(split, indices, config):
-    table = split.table
-    indices = np.asarray(indices, dtype=int)
-    return (
-        to_tensor(field_features(table.sigma[indices], config.e_ref), dtype=torch.float32),
-        to_tensor(_raw_quanta(split, indices), dtype=torch.float32),
-        to_tensor(np.asarray(table.valid[indices], dtype=np.bool_), dtype=torch.bool),
-        to_tensor(np.asarray(table.sigma[indices], dtype=np.float64), dtype=torch.float64),
-    )
+    return _pack_mean(split, indices, config)
 
 
 def _pack_mean(split, indices, config):

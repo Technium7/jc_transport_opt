@@ -11,6 +11,8 @@ from torch import nn
 from .encoders import ResidualMLP, StructuredTransformer
 from .factorized import (
     ArithmeticMeanHead,
+    ConditionalGammaHead,
+    ConditionalShapeHead,
     GammaShapeHead,
     MeanUncertaintyHead,
     ShapeHead,
@@ -148,22 +150,24 @@ class SurrogateNet(nn.Module):
 
 
 class ShapeNet(nn.Module):
-    """Field-only ratio curve. The design vector is not an input."""
+    """Ratio curve from the design and the field. The mean head is not an input."""
 
     def __init__(self, config: SurrogateConfig):
         super().__init__()
         if config.head not in ("gauss_lognorm", "gamma"):
             raise ValueError("a shape model needs the gauss_lognorm or gamma head")
         self.config = config
+        self.encoder = build_encoder(config)
         if config.head == "gamma":
-            self.shape_head = GammaShapeHead(scale_floor=config.scale_floor)
+            self.shape_head = ConditionalGammaHead(self.encoder.out_dim, scale_floor=config.scale_floor)
         else:
-            self.shape_head = ShapeHead(scale_floor=config.scale_floor, copula=False)
+            self.shape_head = ConditionalShapeHead(self.encoder.out_dim, scale_floor=config.scale_floor)
 
-    def forward(self, field):
+    def forward(self, design, field):
+        hidden = self.encoder(design, field)
         if self.config.head == "gamma":
-            return {"shape": self.shape_head(field)}
-        gaussian_scale, lognormal_scale, logit, _corr = self.shape_head(field)
+            return {"shape": self.shape_head(hidden)}
+        gaussian_scale, lognormal_scale, logit = self.shape_head(hidden)
         return {
             "gaussian_scale": gaussian_scale,
             "lognormal_scale": lognormal_scale,
@@ -562,14 +566,16 @@ class EnsemblePredictor(SurrogatePredictor):
 
 
 class ShapePredictor:
-    """Stray-field amplitude in, unit-mean ratio distribution out.
+    """Design and stray-field amplitude in, unit-mean ratio distribution out.
 
     Held-out ratios are formed with the observed sample mean. The predicted
     mean is not an input.
     """
 
-    def __init__(self, model, e_ref, device="cpu"):
+    def __init__(self, model, lower, upper, e_ref, device="cpu"):
         self.model = model
+        self.lower = np.asarray(lower, dtype=np.float64)
+        self.upper = np.asarray(upper, dtype=np.float64)
         self.e_ref = float(e_ref)
         self.device = torch.device(device)
         self.model.to(self.device)
@@ -579,17 +585,24 @@ class ShapePredictor:
     def config(self):
         return self.model.config
 
-    def parameters_at(self, sigma):
-        sigma = np.asarray(sigma, dtype=np.float64).reshape(-1)
+    def _predict(self, design, sigma):
+        design, sigma = _batch(design, sigma)
+        design_n = normalize_design(design, self.lower, self.upper)
         field = field_features(sigma, self.e_ref)
         self.model.eval()
         with torch.no_grad():
-            pred = self.model(to_tensor(field, dtype=torch.float32, device=self.device))
-        return {key: None if value is None else tensor_to_numpy(value.detach().cpu()) for key, value in pred.items()}
+            pred = self.model(
+                to_tensor(design_n, dtype=torch.float32, device=self.device),
+                to_tensor(field, dtype=torch.float32, device=self.device),
+            )
+        return sigma, {key: None if value is None else tensor_to_numpy(value.detach().cpu()) for key, value in pred.items()}
 
-    def sample_ratios(self, sigma, n_samples=32, rng=None):
-        sigma = np.asarray(sigma, dtype=np.float64).reshape(-1)
-        params = self.parameters_at(sigma)
+    def parameters_at(self, design, sigma):
+        _sigma, params = self._predict(design, sigma)
+        return params
+
+    def sample_ratios(self, design, sigma, n_samples=32, rng=None):
+        sigma, params = self._predict(design, sigma)
         generator = _rng(rng)
         if self.config.head == "gamma":
             ratios = sample_unit_gamma(params["shape"], generator, (int(n_samples), len(sigma), params["shape"].shape[-1]))
@@ -603,8 +616,8 @@ class ShapePredictor:
             ratios[:, frozen, :] = 1.0
         return ratios
 
-    def curve_cv(self, sigma):
-        params = self.parameters_at(sigma)
+    def curve_cv(self, design, sigma):
+        params = self.parameters_at(design, sigma)
         if self.config.head == "gamma":
             variance = gamma_ratio_variance(params["shape"])
         else:
@@ -612,21 +625,25 @@ class ShapePredictor:
             variance = ratio_variance(params["gaussian_scale"], params["lognormal_scale"], weight)
         return np.sqrt(np.maximum(variance, 0.0))
 
-    def working_nll(self, sigma, quanta, valid):
+    def working_nll(self, design, sigma, quanta, valid):
         from .factorized import shape_ratio_nll
 
-        sigma = np.asarray(sigma, dtype=np.float64).reshape(-1)
+        design, sigma = _batch(design, sigma)
+        design_n = normalize_design(design, self.lower, self.upper)
         field = field_features(sigma, self.e_ref)
         self.model.eval()
         with torch.no_grad():
-            pred = self.model(to_tensor(field, dtype=torch.float32, device=self.device))
+            pred = self.model(
+                to_tensor(design_n, dtype=torch.float32, device=self.device),
+                to_tensor(field, dtype=torch.float32, device=self.device),
+            )
             nll, _usable = shape_ratio_nll(
                 pred,
                 to_tensor(np.nan_to_num(quanta, nan=0.0), dtype=torch.float32, device=self.device),
                 to_tensor(np.asarray(valid, dtype=np.bool_), dtype=torch.bool, device=self.device),
             )
         scores = tensor_to_numpy(nll.detach().cpu())
-        scores[sigma <= 0.0] = np.nan
+        scores[np.asarray(sigma).reshape(-1) <= 0.0] = np.nan
         return scores
 
     def save(self, path, extra=None):
@@ -634,6 +651,8 @@ class ShapePredictor:
             "kind": "shape",
             "state_dict": self.model.state_dict(),
             "config": asdict(self.config),
+            "lower": self.lower,
+            "upper": self.upper,
             "e_ref": self.e_ref,
         }
         if extra:
@@ -651,7 +670,7 @@ class ShapePredictor:
         model.load_state_dict(payload["state_dict"])
         if device is None:
             device = default_device()
-        return cls(model, payload["e_ref"], device)
+        return cls(model, payload["lower"], payload["upper"], payload["e_ref"], device)
 
 
 class MeanPredictor:

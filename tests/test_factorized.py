@@ -248,25 +248,34 @@ class FactorizedDistributionTests(unittest.TestCase):
         self.assertFalse(bool(usable[:, :, 1].any()))
         self.assertTrue(bool(usable[:, :, 2].all()))
 
-    def test_shape_loss_uses_only_the_field_curve(self):
+    def test_separate_shape_depends_on_the_design(self):
+        from ion_npe.surrogate.layout import JOINT_DIM
+
         config = SurrogateConfig(arch="mlp", head="gauss_lognorm", hidden=16, n_blocks=1, dropout=0.0)
         model = ShapeNet(config)
-        self.assertFalse(hasattr(model, "encoder"))
-        field = torch.tensor([[0.2, 0.01], [1.2, 0.4]], dtype=torch.float32)
+        torch.nn.init.normal_(model.shape_head.proj.weight, std=0.2)
+        design = torch.zeros(2, JOINT_DIM)
+        design[1, 0] = 1.0
+        field = torch.tensor([[0.4, 0.05], [0.4, 0.05]], dtype=torch.float32)
+        pred = model(design, field)
+        self.assertGreater(float((pred["gaussian_scale"][0] - pred["gaussian_scale"][1]).abs().sum()), 0.0)
         quanta = torch.rand(2, 8, 3) + 0.2
         mask = torch.ones(2, 8, dtype=torch.bool)
-        loss, pair = shape_objective(model(field), quanta, mask, torch.tensor([0.0, 1.0]))
+        loss, pair = shape_objective(pred, quanta, mask, torch.tensor([0.0, 1.0]))
         loss.backward()
-        self.assertTrue(torch.isfinite(model.shape_head.proj.weight.grad).all())
+        self.assertTrue(torch.isfinite(model.encoder.in_proj.weight.grad).all())
         self.assertEqual(float(pair[0]), 0.0)
 
     def test_gamma_shape_loss_backward_is_finite(self):
+        from ion_npe.surrogate.layout import JOINT_DIM
+
         config = SurrogateConfig(arch="mlp", head="gamma", hidden=16, n_blocks=1, dropout=0.0)
         model = ShapeNet(config)
+        design = torch.zeros(1, JOINT_DIM)
         field = torch.tensor([[0.4, 0.02]], dtype=torch.float32)
         quanta = torch.rand(1, 10, 3) + 0.3
         mask = torch.ones(1, 10, dtype=torch.bool)
-        loss, _pair = shape_objective(model(field), quanta, mask, torch.tensor([1.0]))
+        loss, _pair = shape_objective(model(design, field), quanta, mask, torch.tensor([1.0]))
         loss.backward()
         self.assertTrue(torch.isfinite(model.shape_head.proj.weight.grad).all())
 

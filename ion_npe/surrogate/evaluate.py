@@ -121,23 +121,27 @@ def evaluate_shape_model(predictor, table, indices, n_samples=2048, rng=0):
     from .factorized import MEAN_FLOOR, QUANTILE_LEVELS, _mixture_cdf_numpy
 
     indices = np.asarray(indices, dtype=int)
+    design = table.design[indices]
     sigma = np.asarray(table.sigma[indices], dtype=np.float64)
     quanta = np.asarray(table.quanta[indices], dtype=np.float64)
     valid = np.asarray(table.valid[indices], dtype=bool)
-    nll = predictor.working_nll(sigma, quanta, valid)
-    curve_cv = predictor.curve_cv(sigma)
-    params = predictor.parameters_at(sigma)
+    nll = predictor.working_nll(design, sigma, quanta, valid)
+    curve_cv = predictor.curve_cv(design, sigma)
+    params = predictor.parameters_at(design, sigma)
     generator = np.random.default_rng(int(rng))
     rows = []
     for label in np.unique(np.round(sigma, 8)):
         chosen = np.flatnonzero(np.round(sigma, 8) == label)
         if chosen.size == 0:
             continue
-        draw = predictor.sample_ratios(np.array([label]), n_samples=int(n_samples), rng=generator)[:, 0, :]
-        low_50, high_50 = np.quantile(draw, [0.25, 0.75], axis=0)
-        low_90, high_90 = np.quantile(draw, [0.05, 0.95], axis=0)
-        per_mode = [{"obs_cv": [], "obs_frac": [], "cdf_error": [], "cover_50": [], "cover_90": []} for _ in range(3)]
-        for index in chosen:
+        if label > 0.0:
+            draw = predictor.sample_ratios(
+                design[chosen], np.full(chosen.size, label), n_samples=int(n_samples), rng=generator
+            )
+            low_50, high_50 = np.quantile(draw, [0.25, 0.75], axis=0)
+            low_90, high_90 = np.quantile(draw, [0.05, 0.95], axis=0)
+        per_mode = [{"obs_cv": [], "obs_frac": [], "cdf_error": [], "cover_50": [], "cover_90": [], "pred_frac": []} for _ in range(3)]
+        for local, index in enumerate(chosen):
             ratio, usable = _observed_ratios(quanta[index], valid[index], MEAN_FLOOR)
             for mode in range(3):
                 seeds = ratio[usable[:, mode], mode]
@@ -147,15 +151,17 @@ def evaluate_shape_model(predictor, table, indices, n_samples=2048, rng=0):
                 bucket["obs_cv"].append(float(seeds.std() / max(float(seeds.mean()), 1e-30)))
                 bucket["obs_frac"].append(float(np.mean(seeds < 1.0)))
                 if label > 0.0:
+                    bucket["pred_frac"].append(
+                        _ratio_cdf(1.0, params, index, mode, predictor.config.head, _mixture_cdf_numpy)
+                    )
                     bucket["cdf_error"].append(
                         _quantile_cdf_error(seeds, params, index, mode, predictor.config.head, QUANTILE_LEVELS, _mixture_cdf_numpy)
                     )
-                    bucket["cover_50"].append(float(np.mean((seeds >= low_50[mode]) & (seeds <= high_50[mode]))))
-                    bucket["cover_90"].append(float(np.mean((seeds >= low_90[mode]) & (seeds <= high_90[mode]))))
+                    bucket["cover_50"].append(float(np.mean((seeds >= low_50[local, mode]) & (seeds <= high_50[local, mode]))))
+                    bucket["cover_90"].append(float(np.mean((seeds >= low_90[local, mode]) & (seeds <= high_90[local, mode]))))
         positive = chosen[np.isfinite(nll[chosen])]
         modes = []
         curve = np.median(curve_cv[chosen], axis=0)
-        anchor = int(chosen[0])
         for mode in range(3):
             bucket = per_mode[mode]
             modes.append({
@@ -163,7 +169,7 @@ def evaluate_shape_model(predictor, table, indices, n_samples=2048, rng=0):
                 "obs_cv": _finite_median(bucket["obs_cv"]),
                 "curve_cv": float(curve[mode]),
                 "obs_frac_below": _finite_median(bucket["obs_frac"]),
-                "pred_frac_below": _ratio_cdf(1.0, params, anchor, mode, predictor.config.head, _mixture_cdf_numpy) if label > 0.0 else None,
+                "pred_frac_below": _finite_median(bucket["pred_frac"]) if label > 0.0 else None,
                 "quantile_cdf_mae": _finite_median(bucket["cdf_error"]) if label > 0.0 else None,
                 "coverage_50": _finite_median(bucket["cover_50"]) if label > 0.0 else None,
                 "coverage_90": _finite_median(bucket["cover_90"]) if label > 0.0 else None,

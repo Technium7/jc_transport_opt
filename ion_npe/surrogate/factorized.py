@@ -15,11 +15,12 @@ shares one Gaussian scale, one lognormal scale, and one mixing weight. At
 zero stray field the shape density is not evaluated and samples sit on the mean.
 
 The joint trainer still minimizes both pieces together. ``train_mean_model``
-and ``train_shape_model`` fit them separately. The mean model sees the design
-and the field and never reads the ratio curve. The shape model sees only the
-field and the ratios ``R = n / observed mean``. Dividing by that sample mean
-makes the ratios dependent, so their product density is a working objective,
-not an exact independent-sample likelihood.
+and ``train_shape_model`` fit them separately. Neither loss reads the other
+model. The separate shape model may use the design as well as the field,
+because it is no longer tied to the mean head. The joint ratio curve stays a
+function of the field alone. Dividing by the sample mean makes the ratios
+dependent, so their product density is a working objective, not an exact
+independent-sample likelihood.
 """
 
 from __future__ import annotations
@@ -483,8 +484,8 @@ def shape_objective(
 ):
     """Shape-only batch loss. Zero field and unusable means contribute nothing.
 
-    The model that produced ``pred`` is a function of the field. This loss
-    does not read a predicted mean and does not read the design.
+    The loss scores normalized seeds. It does not read a predicted mean. The
+    network that produced ``pred`` may still depend on the design.
     """
     nll, usable = shape_ratio_nll(pred, quanta, mask)
     ratio, _observed, _usable = normalized_ratios(quanta, mask)
@@ -680,6 +681,66 @@ class ShapeHead(nn.Module):
         logit = raw[..., 2]
         corr = None if self.corr is None else self.corr(hidden)
         return gaussian_scale, lognormal_scale, logit, corr
+
+
+class ConditionalShapeHead(nn.Module):
+    """Mixture parameters from an encoder state that has seen the design."""
+
+    def __init__(self, in_dim, n_modes=N_MODES, scale_floor=1e-3, width=32):
+        super().__init__()
+        self.n_modes = int(n_modes)
+        self.scale_floor = float(scale_floor)
+        self.trunk = nn.Sequential(nn.Linear(int(in_dim), int(width)), nn.Tanh())
+        self.proj = nn.Linear(int(width), self.n_modes * 3)
+        self.skip = nn.Linear(int(in_dim), self.n_modes * 3)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.trunk[0].weight)
+        nn.init.zeros_(self.trunk[0].bias)
+        nn.init.xavier_uniform_(self.proj.weight)
+        self.proj.weight.data.mul_(0.1)
+        nn.init.xavier_uniform_(self.skip.weight)
+        self.skip.weight.data.mul_(0.1)
+        nn.init.zeros_(self.proj.bias)
+        nn.init.zeros_(self.skip.bias)
+        bias = self.proj.bias.data
+        gauss_bias = _inv_softplus(0.05)
+        lognorm_bias = _inv_softplus(0.40)
+        for mode in range(self.n_modes):
+            bias[mode * 3] = gauss_bias
+            bias[mode * 3 + 1] = lognorm_bias
+            bias[mode * 3 + 2] = -1.5
+
+    def forward(self, hidden):
+        raw = (self.proj(self.trunk(hidden)) + self.skip(hidden)).view(-1, self.n_modes, 3)
+        gaussian_scale = F.softplus(raw[..., 0]) + self.scale_floor
+        lognormal_scale = F.softplus(raw[..., 1]) + self.scale_floor
+        logit = raw[..., 2]
+        return gaussian_scale, lognormal_scale, logit
+
+
+class ConditionalGammaHead(nn.Module):
+    """Gamma shape from an encoder state that has seen the design."""
+
+    def __init__(self, in_dim, n_modes=N_MODES, scale_floor=1e-3, width=32):
+        super().__init__()
+        self.floor = float(scale_floor)
+        self.trunk = nn.Sequential(nn.Linear(int(in_dim), int(width)), nn.Tanh())
+        self.proj = nn.Linear(int(width), int(n_modes))
+        self.skip = nn.Linear(int(in_dim), int(n_modes))
+        nn.init.xavier_uniform_(self.trunk[0].weight)
+        nn.init.zeros_(self.trunk[0].bias)
+        nn.init.xavier_uniform_(self.proj.weight)
+        self.proj.weight.data.mul_(0.1)
+        nn.init.xavier_uniform_(self.skip.weight)
+        self.skip.weight.data.mul_(0.1)
+        nn.init.constant_(self.proj.bias, _inv_softplus(5.0))
+        nn.init.zeros_(self.skip.bias)
+
+    def forward(self, hidden):
+        raw = F.softplus(self.proj(self.trunk(hidden)) + self.skip(hidden)) + self.floor
+        return raw.clamp(max=1.0e4)
 
 
 class GammaShapeHead(nn.Module):

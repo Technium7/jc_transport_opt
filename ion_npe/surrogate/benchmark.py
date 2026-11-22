@@ -193,12 +193,13 @@ def run_independent_study(
     holdout_fields=(0.5, 2.0),
     seed=0,
     device="cpu",
-    n_samples=2048,
+    n_samples=512,
+    names=None,
 ):
     """Train the mean and the ratio curve separately and score each on its own.
 
-    The shape models never see the design. The mean model never sees the ratio
-    curve. Held-out ratios are built from the observed sample mean.
+    The shape model reads the design and the field. It does not read the mean
+    network. Held-out ratios are built from the observed sample mean.
     """
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -218,6 +219,9 @@ def run_independent_study(
         ("shape_gamma", "shape", SurrogateConfig(arch="transformer", head="gamma")),
         ("mean_transformer", "mean", SurrogateConfig(arch="transformer", head="gauss_lognorm")),
     )
+    if names is not None:
+        wanted = set(names)
+        jobs = tuple(job for job in jobs if job[0] in wanted)
     summaries = []
     for name, kind, config in jobs:
         print("training {}".format(name), flush=True)
