@@ -1,0 +1,93 @@
+{
+  "n": 1638,
+  "arith_log_rmse": 3.480357209812799,
+  "arith_log_mae": 2.5991197503819254,
+  "by_field": [
+    {
+      "sigma": 0.0,
+      "arith_log_rmse": 3.3748190808072045,
+      "linear_nll": null
+    },
+    {
+      "sigma": 0.1,
+      "arith_log_rmse": 3.4603447553907745,
+      "linear_nll": null
+    },
+    {
+      "sigma": 0.2,
+      "arith_log_rmse": 3.3694419027803764,
+      "linear_nll": null
+    },
+    {
+      "sigma": 1.0,
+      "arith_log_rmse": 3.5715017498727653,
+      "linear_nll": null
+    },
+    {
+      "sigma": 5.0,
+      "arith_log_rmse": 3.664106123706817,
+      "linear_nll": null
+    },
+    {
+      "sigma": 10.0,
+      "arith_log_rmse": 3.432126312024733,
+      "linear_nll": null
+    }
+  ],
+  "ranking": [
+    {
+      "sigma": 0.0,
+      "n": 273,
+      "predicted_best_true_total": 129.54514578972166,
+      "true_best_total": 12.692374983245232,
+      "log10_regret": 1.0088782496928725,
+      "top_overlap": 0.0,
+      "spearman_log": 0.7177371790939846
+    },
+    {
+      "sigma": 0.1,
+      "n": 273,
+      "predicted_best_true_total": 129.55887136256666,
+      "true_best_total": 12.724930903436709,
+      "log10_regret": 1.0078117232577004,
+      "top_overlap": 0.0,
+      "spearman_log": 0.7149846182156187
+    },
+    {
+      "sigma": 0.2,
+      "n": 273,
+      "predicted_best_true_total": 129.58279852254455,
+      "true_best_total": 12.766387528492892,
+      "log10_regret": 1.0064793314437794,
+      "top_overlap": 0.0,
+      "spearman_log": 0.7252257725100146
+    },
+    {
+      "sigma": 1.0,
+      "n": 273,
+      "predicted_best_true_total": 130.13819187013848,
+      "true_best_total": 13.552227675650963,
+      "log10_regret": 0.9823940792478176,
+      "top_overlap": 0.1,
+      "spearman_log": 0.717680559028777
+    },
+    {
+      "sigma": 5.0,
+      "n": 273,
+      "predicted_best_true_total": 142.12731159551635,
+      "true_best_total": 19.08264637527499,
+      "log10_regret": 0.872038938867485,
+      "top_overlap": 0.2,
+      "spearman_log": 0.7246890614752357
+    },
+    {
+      "sigma": 10.0,
+      "n": 273,
+      "predicted_best_true_total": 2215.696636001625,
+      "true_best_total": 49.99871647059203,
+      "log10_regret": 1.6465514427283936,
+      "top_overlap": 0.3,
+      "spearman_log": 0.6853528609647116
+    }
+  ]
+}

@@ -13,6 +13,9 @@ from ion_npe.surrogate.factorized import (
     _width_penalty,
     cloud_summary_loss,
     cold_pairwise_rank_loss,
+    mean_objective,
+    normalized_ratios,
+    shape_objective,
     factorized_terms,
     gamma_phonon_log_prob,
     mixture_ratio_log_prob,
@@ -27,7 +30,7 @@ from ion_npe.surrogate.factorized import (
     unit_lognormal_log_prob,
 )
 from ion_npe.surrogate.layout import legal_bounds
-from ion_npe.surrogate.model import SurrogateConfig, SurrogateNet, SurrogatePredictor
+from ion_npe.surrogate.model import ShapeNet, SurrogateConfig, SurrogateNet, SurrogatePredictor
 from ion_npe.surrogate.train import train_surrogate
 
 
@@ -236,6 +239,47 @@ class FactorizedDistributionTests(unittest.TestCase):
         total = loaded.expected_total(design, np.array([0.0, 1.0]))
         self.assertEqual(total.shape, (2,))
         self.assertTrue(np.isfinite(total).all())
+
+    def test_normalized_ratios_drop_a_zero_mode_and_keep_unit_mean(self):
+        quanta = torch.tensor([[[2.0, 0.0, 4.0], [4.0, 0.0, 6.0]]], dtype=torch.float64)
+        mask = torch.ones(1, 2, dtype=torch.bool)
+        ratio, _observed, usable = normalized_ratios(quanta, mask)
+        self.assertAlmostEqual(float(ratio[0, :, 0].mean()), 1.0, places=6)
+        self.assertFalse(bool(usable[:, :, 1].any()))
+        self.assertTrue(bool(usable[:, :, 2].all()))
+
+    def test_shape_loss_uses_only_the_field_curve(self):
+        config = SurrogateConfig(arch="mlp", head="gauss_lognorm", hidden=16, n_blocks=1, dropout=0.0)
+        model = ShapeNet(config)
+        self.assertFalse(hasattr(model, "encoder"))
+        field = torch.tensor([[0.2, 0.01], [1.2, 0.4]], dtype=torch.float32)
+        quanta = torch.rand(2, 8, 3) + 0.2
+        mask = torch.ones(2, 8, dtype=torch.bool)
+        loss, pair = shape_objective(model(field), quanta, mask, torch.tensor([0.0, 1.0]))
+        loss.backward()
+        self.assertTrue(torch.isfinite(model.shape_head.proj.weight.grad).all())
+        self.assertEqual(float(pair[0]), 0.0)
+
+    def test_gamma_shape_loss_backward_is_finite(self):
+        config = SurrogateConfig(arch="mlp", head="gamma", hidden=16, n_blocks=1, dropout=0.0)
+        model = ShapeNet(config)
+        field = torch.tensor([[0.4, 0.02]], dtype=torch.float32)
+        quanta = torch.rand(1, 10, 3) + 0.3
+        mask = torch.ones(1, 10, dtype=torch.bool)
+        loss, _pair = shape_objective(model(field), quanta, mask, torch.tensor([1.0]))
+        loss.backward()
+        self.assertTrue(torch.isfinite(model.shape_head.proj.weight.grad).all())
+
+    def test_mean_loss_does_not_need_a_ratio_curve(self):
+        quanta = torch.tensor([[[1.0, 2.0, 3.0], [1.2, 2.2, 3.4]]], dtype=torch.float64)
+        mask = torch.ones(1, 2, dtype=torch.bool)
+        pred = {
+            "mean": torch.tensor([[1.1, 2.1, 3.2]], dtype=torch.float64, requires_grad=True),
+            "typical": torch.tensor([[1.05, 2.05, 3.1]], dtype=torch.float64, requires_grad=True),
+        }
+        loss, _pair = mean_objective(pred, quanta, mask)
+        loss.backward()
+        self.assertTrue(torch.isfinite(pred["mean"].grad).all())
 
     def test_network_learns_a_gaussian_to_lognormal_transition(self):
         lower, upper = legal_bounds()

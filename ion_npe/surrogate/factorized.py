@@ -14,11 +14,12 @@ curve itself is a function of the field only: every design at one amplitude
 shares one Gaussian scale, one lognormal scale, and one mixing weight. At
 zero stray field the shape density is not evaluated and samples sit on the mean.
 
-Training, for a positive field, is the ratio NLL plus the arithmetic-mean
-error, the typical-value error, a residual on the mean shock, a hinge on
-scales above ``SCALE_CAP``, and a per-design cloud term. The cloud term
-matches the sample coefficient of variation and the fraction of seeds below
-the design mean. A cold pairwise rank term is added outside the pair mean.
+The joint trainer still minimizes both pieces together. ``train_mean_model``
+and ``train_shape_model`` fit them separately. The mean model sees the design
+and the field and never reads the ratio curve. The shape model sees only the
+field and the ratios ``R = n / observed mean``. Dividing by that sample mean
+makes the ratios dependent, so their product density is a working objective,
+not an exact independent-sample likelihood.
 """
 
 from __future__ import annotations
@@ -38,6 +39,11 @@ N_MODES = 3
 SCALE_CAP = 2.5
 # A fraction error of 0.25 then costs about as much as a factor-of-two CV error.
 FRACTION_LOSS_WEIGHT = 8.0
+# A mode whose sample mean is below this floor has no usable ratio.
+MEAN_FLOOR = 1e-6
+QUANTILE_LEVELS = (0.1, 0.5, 0.9)
+# A CDF miss of 0.2 at one order statistic costs about 1.
+QUANTILE_LOSS_WEIGHT = 25.0
 
 
 def _phi_log(z):
@@ -249,7 +255,8 @@ def _width_penalty(pred):
     because both the penalty and the likelihood gradient vanish with the weight.
     """
     if "logit" not in pred:
-        return pred["mean"].new_zeros(pred["mean"].shape[0])
+        reference = pred["shape"] if "shape" in pred else pred["mean"]
+        return reference.new_zeros(reference.shape[0])
     gaussian = pred["gaussian_scale"].to(dtype=torch.float64)
     lognormal = pred["lognormal_scale"].to(dtype=torch.float64)
     excess = F.relu(gaussian - SCALE_CAP).square() + F.relu(lognormal - SCALE_CAP).square()
@@ -369,6 +376,161 @@ def factorized_objective(
     log_score = torch.log(mean.sum(dim=-1).clamp_min(1e-30))
     rank = cold_pairwise_rank_loss(log_score, _seed_mean_total(quanta, mask), sigma)
     return pair[keep].mean() + float(lambda_rank) * rank, pair
+
+
+def normalized_ratios(quanta, mask, mean_floor=MEAN_FLOOR):
+    """``R = n / sample mean`` on valid seeds whose mode mean clears the floor.
+
+    The returned ratio is 1 wherever it is not usable, so a later density
+    evaluation can mask those entries. The sample mean is data and is detached
+    from any predicted mean.
+    """
+    quanta = quanta.to(dtype=torch.float64)
+    mask_f = mask.to(dtype=quanta.dtype)
+    safe = torch.where(mask.unsqueeze(-1), quanta, torch.zeros_like(quanta))
+    count = mask_f.sum(dim=-1).clamp_min(1.0)
+    observed = safe.sum(dim=1) / count.unsqueeze(-1)
+    usable = mask.unsqueeze(-1) & (observed.unsqueeze(1) >= float(mean_floor))
+    ratio = torch.where(usable, safe / observed.clamp_min(float(mean_floor)).unsqueeze(1), torch.ones_like(safe))
+    return ratio, observed, usable
+
+
+def _ratio_log_density(pred, ratio):
+    if "shape" in pred:
+        return unit_gamma_log_prob(ratio, pred["shape"].to(dtype=torch.float64).unsqueeze(1))
+    return mixture_ratio_log_prob(
+        ratio,
+        pred["gaussian_scale"].to(dtype=torch.float64).unsqueeze(1),
+        pred["lognormal_scale"].to(dtype=torch.float64).unsqueeze(1),
+        pred["logit"].to(dtype=torch.float64).unsqueeze(1),
+    )
+
+
+def shape_ratio_nll(pred, quanta, mask):
+    """Working per-pair ratio NLL. Pairs with no usable mode are NaN.
+
+    Each design-field pair is one term: seeds are averaged inside the pair, so
+    a pair with more realizations does not count more than a pair with fewer.
+    """
+    ratio, _observed, usable = normalized_ratios(quanta, mask)
+    log_density = _ratio_log_density(pred, ratio)
+    usable_f = usable.to(dtype=log_density.dtype)
+    per_mode = -(log_density * usable_f).sum(dim=1) / usable_f.sum(dim=1).clamp_min(1.0)
+    counted = usable.any(dim=1).to(dtype=per_mode.dtype)
+    nll = (per_mode * counted).sum(dim=-1) / counted.sum(dim=-1).clamp_min(1.0)
+    return torch.where(counted.sum(dim=-1) > 0, nll, torch.full_like(nll, float("nan"))), usable
+
+
+def _ratio_cloud_loss(pred, ratio, usable, cv_floor=1e-3):
+    """Match CV and ``P(R < 1)`` on the normalized seeds of each usable mode."""
+    usable_f = usable.to(dtype=torch.float64)
+    count = usable_f.sum(dim=1).clamp_min(1.0)
+    second = ((ratio - 1.0).square() * usable_f).sum(dim=1) / count
+    observed_cv = second.clamp_min(0.0).sqrt()
+    below = ((ratio < 1.0).to(dtype=usable_f.dtype) * usable_f).sum(dim=1) / count
+    if "shape" in pred:
+        curve_cv, curve_below = _gamma_cloud(pred["shape"].to(dtype=torch.float64))
+    else:
+        curve_cv, curve_below = _mixture_cloud(
+            pred["gaussian_scale"].to(dtype=torch.float64),
+            pred["lognormal_scale"].to(dtype=torch.float64),
+            pred["logit"].to(dtype=torch.float64),
+        )
+    cv_gap = (torch.log(curve_cv.clamp_min(cv_floor)) - torch.log(observed_cv.clamp_min(cv_floor))).square()
+    frac_gap = (curve_below - below).square()
+    per_mode = cv_gap + FRACTION_LOSS_WEIGHT * frac_gap
+    enough = usable_f.sum(dim=1) >= 2.0
+    counted = enough.to(dtype=per_mode.dtype)
+    return (per_mode * counted).sum(dim=-1) / counted.sum(dim=-1).clamp_min(1.0)
+
+
+def _quantile_match_loss(pred, ratio, usable):
+    """Ask the mixture CDF to equal 0.1, 0.5, and 0.9 at those order statistics.
+
+    Gamma shape has no CDF derivative in this PyTorch build, so a gamma model
+    is trained through the ratio density and the coefficient of variation.
+    """
+    if "logit" not in pred:
+        reference = pred["shape"]
+        return reference.new_zeros(reference.shape[0], dtype=torch.float64)
+    filled = torch.where(usable, ratio, torch.full_like(ratio, float("inf")))
+    ordered, _index = torch.sort(filled, dim=1)
+    count = usable.to(dtype=torch.float64).sum(dim=1)
+    scale_g = pred["gaussian_scale"].to(dtype=torch.float64)
+    scale_l = pred["lognormal_scale"].to(dtype=torch.float64)
+    logit = pred["logit"].to(dtype=torch.float64)
+    total = torch.zeros(ratio.shape[0], ratio.shape[-1], dtype=torch.float64, device=ratio.device)
+    last = ordered.shape[1] - 1
+    for level in QUANTILE_LEVELS:
+        index = ((count - 1.0).clamp_min(0.0) * level).round().to(dtype=torch.long).clamp(0, last)
+        picked = ordered.gather(1, index.unsqueeze(1)).squeeze(1)
+        picked = torch.where(torch.isfinite(picked), picked, torch.ones_like(picked))
+        total = total + (mixture_log_cdf(picked, scale_g, scale_l, logit) - level).square()
+    per_mode = QUANTILE_LOSS_WEIGHT * total / len(QUANTILE_LEVELS)
+    enough = count >= 2.0
+    counted = enough.to(dtype=per_mode.dtype)
+    return (per_mode * counted).sum(dim=-1) / counted.sum(dim=-1).clamp_min(1.0)
+
+
+def shape_objective(
+    pred,
+    quanta,
+    mask,
+    sigma,
+    lambda_shape=0.2,
+    lambda_cloud=0.5,
+    lambda_quantile=1.0,
+):
+    """Shape-only batch loss. Zero field and unusable means contribute nothing.
+
+    The model that produced ``pred`` is a function of the field. This loss
+    does not read a predicted mean and does not read the design.
+    """
+    nll, usable = shape_ratio_nll(pred, quanta, mask)
+    ratio, _observed, _usable = normalized_ratios(quanta, mask)
+    cloud = _ratio_cloud_loss(pred, ratio, usable)
+    quantile = _quantile_match_loss(pred, ratio, usable)
+    finite = torch.isfinite(nll)
+    nll = torch.where(finite, nll, torch.zeros_like(nll))
+    positive = sigma.to(dtype=nll.dtype) > 0
+    active = positive & finite & usable.any(dim=1).any(dim=-1)
+    pair = (
+        nll
+        + float(lambda_shape) * _width_penalty(pred).to(dtype=nll.dtype)
+        + float(lambda_cloud) * cloud
+        + float(lambda_quantile) * quantile
+    )
+    pair = torch.where(active, pair, torch.zeros_like(pair))
+    if not bool(active.any()):
+        return nll.sum() * 0.0, pair
+    return pair[active].mean(), pair
+
+
+def mean_objective(pred, quanta, mask, lambda_mean=1.0, lambda_typical=1.0):
+    """Log error of the arithmetic mean and of the typical (median) value.
+
+    This loss does not read a ratio curve. Pairs with no positive sample mean
+    are left out.
+    """
+    mean = pred["mean"].to(dtype=torch.float64).clamp_min(1e-30)
+    quanta = quanta.to(dtype=torch.float64)
+    safe = torch.where(mask.unsqueeze(-1), quanta, torch.ones_like(quanta))
+    observed, _counted = _masked_mean(safe, mask)
+    positive = observed > 0
+    log_error = torch.log(mean) - torch.log(observed.clamp_min(1e-30))
+    mse = (log_error.square() * positive.to(mean.dtype)).sum(dim=-1)
+    mse = mse / positive.to(mean.dtype).sum(dim=-1).clamp_min(1.0)
+    typical = pred.get("typical", mean).to(dtype=torch.float64).clamp_min(1e-30)
+    median = _masked_median(safe, mask).clamp_min(1e-30)
+    typical_error = torch.log(typical) - torch.log(median)
+    typical_mse = (typical_error.square() * positive.to(mean.dtype)).sum(dim=-1)
+    typical_mse = typical_mse / positive.to(mean.dtype).sum(dim=-1).clamp_min(1.0)
+    pair = float(lambda_mean) * mse + float(lambda_typical) * typical_mse
+    keep = mask.to(dtype=pair.dtype).sum(dim=-1) > 0
+    keep = keep & positive.any(dim=-1)
+    if not bool(keep.any()):
+        raise ValueError("mean loss received no positive sample means")
+    return pair[keep].mean(), pair
 
 
 def predictive_nll(pred, quanta, mask, n_quad=16):

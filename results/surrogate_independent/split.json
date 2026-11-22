@@ -1,0 +1,12 @@
+{
+  "holdout_fields": [
+    0.5,
+    2.0
+  ],
+  "n_train": 7632,
+  "n_val": 1638,
+  "n_test": 1638,
+  "n_interp": 3636,
+  "epochs": 60,
+  "patience": 12
+}

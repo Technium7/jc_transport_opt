@@ -17,9 +17,9 @@ from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 from .data import field_sample_weights, quanta_to_log, split_payload
 from .layout import field_features, normalize_design
-from .factorized import factorized_objective
+from .factorized import factorized_objective, mean_objective, shape_objective
 from .heads import mixture_nll
-from .model import SurrogateNet, SurrogatePredictor, default_device
+from .model import MeanNet, MeanPredictor, ShapeNet, ShapePredictor, SurrogateNet, SurrogatePredictor, default_device
 from .torch_compat import tensor_to_numpy, to_tensor
 
 
@@ -169,6 +169,117 @@ def train_surrogate(
     return predictor
 
 
+def train_shape_model(
+    split,
+    config,
+    epochs=60,
+    batch_size=128,
+    lr=3e-4,
+    weight_decay=1e-4,
+    patience=12,
+    seed=0,
+    device=None,
+    grad_clip=1.0,
+    log_every=5,
+):
+    """Fit ``p(R | sigma)`` from normalized seeds. The design is not an input.
+
+    Each design-field pair has equal weight inside the loss, and field
+    amplitudes are sampled in balance, so a pair with more seeds or a crowded
+    amplitude does not dominate. Zero field is left out: the samples sit on
+    the mean and the ratio density is not defined.
+    """
+    if config.head not in ("gauss_lognorm", "gamma"):
+        raise ValueError("train_shape_model needs gauss_lognorm or gamma")
+    if device is None:
+        device = default_device()
+    device = torch.device(device)
+    set_seed(seed)
+    train_pack = _pack_shape(split, split.train, config)
+    val_pack = _pack_shape(split, split.val, config) if len(split.val) else None
+    model = ShapeNet(config).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(lr), weight_decay=float(weight_decay))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(int(epochs), 1))
+    history, best_score, best_state = _fit_independent(
+        model,
+        optimizer,
+        scheduler,
+        _shape_loader(train_pack, batch_size, seed),
+        val_pack,
+        device,
+        epochs,
+        patience,
+        grad_clip,
+        log_every,
+        lambda step_model, batch: shape_objective(
+            step_model(batch[0].to(device)),
+            batch[1].to(device),
+            batch[2].to(device),
+            batch[3].to(device),
+            lambda_shape=config.lambda_shape,
+            lambda_cloud=config.lambda_cloud,
+            lambda_quantile=config.lambda_quantile,
+        ),
+        _shape_val_score,
+    )
+    model.load_state_dict(best_state)
+    predictor = ShapePredictor(model, config.e_ref, device)
+    predictor.history = history
+    predictor.best_score = best_score
+    return predictor
+
+
+def train_mean_model(
+    split,
+    config,
+    epochs=60,
+    batch_size=128,
+    lr=3e-4,
+    weight_decay=1e-4,
+    patience=12,
+    seed=0,
+    device=None,
+    grad_clip=1.0,
+    log_every=5,
+):
+    """Fit ``mu(design, sigma)``. The ratio curve is not in the graph."""
+    if device is None:
+        device = default_device()
+    device = torch.device(device)
+    set_seed(seed)
+    train_pack = _pack_mean(split, split.train, config)
+    val_pack = _pack_mean(split, split.val, config) if len(split.val) else None
+    model = MeanNet(config).to(device)
+    model.mean_head.set_log_bias(_center_arith_log(train_pack[2], train_pack[3]))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(lr), weight_decay=float(weight_decay))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(int(epochs), 1))
+    history, best_score, best_state = _fit_independent(
+        model,
+        optimizer,
+        scheduler,
+        _mean_loader(train_pack, batch_size, seed),
+        val_pack,
+        device,
+        epochs,
+        patience,
+        grad_clip,
+        log_every,
+        lambda step_model, batch: mean_objective(
+            step_model(batch[0].to(device), batch[1].to(device)),
+            batch[2].to(device),
+            batch[3].to(device),
+            lambda_mean=config.lambda_mean,
+            lambda_typical=config.lambda_typical,
+        ),
+        _mean_val_score,
+    )
+    model.load_state_dict(best_state)
+    predictor = MeanPredictor(model, split.table.lower, split.table.upper, config.e_ref, device)
+    predictor.history = history
+    predictor.best_score = best_score
+    return predictor
+
+
 def save_training(path, predictor, split, history, optimizer=None, epoch=0, best_score=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -263,6 +374,151 @@ def _fit_shape(
     for parameter in model.parameters():
         parameter.requires_grad_(True)
     return best_score, best_state, history
+
+
+def _fit_independent(
+    model, optimizer, scheduler, loader, val_pack, device, epochs, patience, grad_clip, log_every, loss_fn, score_fn,
+):
+    history = {"train": [], "val": []}
+    best_score = np.inf
+    best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+    stalled = 0
+    for epoch in range(int(epochs)):
+        model.train()
+        losses = []
+        for batch in loader:
+            optimizer.zero_grad(set_to_none=True)
+            loss, _per_pair = loss_fn(model, batch)
+            if not torch.isfinite(loss):
+                raise RuntimeError("training loss became non-finite at epoch {}".format(epoch))
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
+            optimizer.step()
+            losses.append(float(loss.detach().cpu()))
+        scheduler.step()
+        train_loss = float(np.mean(losses)) if losses else float("nan")
+        history["train"].append(train_loss)
+        if val_pack is None:
+            score = train_loss
+            history["val"].append(float("nan"))
+        else:
+            score = score_fn(model, val_pack, device)
+            history["val"].append(float(score))
+        if np.isfinite(score) and score < best_score - 1e-6:
+            best_score = float(score)
+            best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            stalled = 0
+        else:
+            stalled += 1
+        if log_every and (epoch % int(log_every) == 0 or epoch == int(epochs) - 1):
+            print("  epoch {:4d}  train {:.4g}  val {:.4g}".format(epoch, train_loss, history["val"][-1]), flush=True)
+        if patience and stalled >= int(patience) and epoch + 1 < int(epochs):
+            print("  early stop at epoch {}".format(epoch), flush=True)
+            break
+    return history, best_score, best_state
+
+
+def _shape_val_score(model, pack, device):
+    model.eval()
+    field, raw, mask, sigma = pack
+    config = model.config
+    with torch.no_grad():
+        _loss, per_pair = shape_objective(
+            model(field.to(device)),
+            raw.to(device),
+            mask.to(device),
+            sigma.to(device),
+            lambda_shape=config.lambda_shape,
+            lambda_cloud=config.lambda_cloud,
+            lambda_quantile=config.lambda_quantile,
+        )
+    scores = tensor_to_numpy(per_pair.detach().cpu())
+    labels = tensor_to_numpy(sigma)
+    model.train()
+    return _balanced_mean(scores, labels, labels > 0.0)
+
+
+def _mean_val_score(model, pack, device):
+    model.eval()
+    design, field, raw, mask, sigma = pack
+    config = model.config
+    with torch.no_grad():
+        _loss, per_pair = mean_objective(
+            model(design.to(device), field.to(device)),
+            raw.to(device),
+            mask.to(device),
+            lambda_mean=config.lambda_mean,
+            lambda_typical=config.lambda_typical,
+        )
+    scores = tensor_to_numpy(per_pair.detach().cpu())
+    labels = tensor_to_numpy(sigma)
+    keep = tensor_to_numpy(mask).any(axis=1)
+    model.train()
+    return _balanced_mean(scores, labels, keep)
+
+
+def _balanced_mean(scores, sigma, keep):
+    labels = np.round(np.asarray(sigma, dtype=np.float64), 8)
+    keep = np.asarray(keep, dtype=bool)
+    total = 0.0
+    count = 0
+    for label in np.unique(labels):
+        chosen = keep & (labels == label)
+        if not np.any(chosen):
+            continue
+        total += float(scores[chosen].mean())
+        count += 1
+    if count == 0:
+        return float("nan")
+    return total / count
+
+
+def _balanced_loader(tensors, sigma, batch_size, seed):
+    weights = field_sample_weights(tensor_to_numpy(sigma))
+    generator = torch.Generator()
+    generator.manual_seed(int(seed))
+    sampler = WeightedRandomSampler(
+        to_tensor(weights, dtype=torch.float64),
+        num_samples=len(weights),
+        replacement=True,
+        generator=generator,
+    )
+    return DataLoader(
+        TensorDataset(*tensors),
+        batch_size=min(int(batch_size), len(weights)),
+        sampler=sampler,
+    )
+
+
+def _shape_loader(pack, batch_size, seed):
+    return _balanced_loader(pack, pack[3], batch_size, seed)
+
+
+def _mean_loader(pack, batch_size, seed):
+    return _balanced_loader(pack[:4], pack[4], batch_size, seed)
+
+
+def _pack_shape(split, indices, config):
+    table = split.table
+    indices = np.asarray(indices, dtype=int)
+    return (
+        to_tensor(field_features(table.sigma[indices], config.e_ref), dtype=torch.float32),
+        to_tensor(_raw_quanta(split, indices), dtype=torch.float32),
+        to_tensor(np.asarray(table.valid[indices], dtype=np.bool_), dtype=torch.bool),
+        to_tensor(np.asarray(table.sigma[indices], dtype=np.float64), dtype=torch.float64),
+    )
+
+
+def _pack_mean(split, indices, config):
+    table = split.table
+    indices = np.asarray(indices, dtype=int)
+    return (
+        to_tensor(normalize_design(table.design[indices], table.lower, table.upper), dtype=torch.float32),
+        to_tensor(field_features(table.sigma[indices], config.e_ref), dtype=torch.float32),
+        to_tensor(_raw_quanta(split, indices), dtype=torch.float32),
+        to_tensor(np.asarray(table.valid[indices], dtype=np.bool_), dtype=torch.bool),
+        to_tensor(np.asarray(table.sigma[indices], dtype=np.float64), dtype=torch.float64),
+    )
 
 
 def _raw_quanta(split, indices):

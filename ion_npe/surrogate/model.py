@@ -64,6 +64,7 @@ class SurrogateConfig:
     lambda_rank: float = 0.5
     lambda_shape: float = 0.2
     lambda_cloud: float = 0.5
+    lambda_quantile: float = 1.0
     scale_floor: float = 1e-3
     copula: bool = False
 
@@ -76,9 +77,30 @@ class SurrogateConfig:
             raise ValueError("head must be log_mixture, gauss_lognorm, or gamma")
         if self.copula and self.head != "gauss_lognorm":
             raise ValueError("the Gaussian copula is only defined for the gauss_lognorm head")
-        for name in ("lambda_mean", "lambda_typical", "lambda_scale", "lambda_rank", "lambda_shape", "lambda_cloud"):
+        for name in (
+            "lambda_mean", "lambda_typical", "lambda_scale", "lambda_rank",
+            "lambda_shape", "lambda_cloud", "lambda_quantile",
+        ):
             if float(getattr(self, name)) < 0.0:
                 raise ValueError("{} must be non-negative".format(name))
+
+
+def build_encoder(config):
+    """The same design-and-field encoder used by the joint and mean models."""
+    if config.arch == "mlp":
+        return ResidualMLP(
+            JOINT_DIM + 2,
+            hidden=config.hidden,
+            n_blocks=config.n_blocks,
+            dropout=config.dropout,
+        )
+    return StructuredTransformer(
+        d_model=config.d_model,
+        n_layers=config.n_layers,
+        n_heads=config.n_heads,
+        ff=config.ff,
+        dropout=config.dropout,
+    )
 
 
 class SurrogateNet(nn.Module):
@@ -87,21 +109,7 @@ class SurrogateNet(nn.Module):
     def __init__(self, config: SurrogateConfig):
         super().__init__()
         self.config = config
-        if config.arch == "mlp":
-            self.encoder = ResidualMLP(
-                JOINT_DIM + 2,
-                hidden=config.hidden,
-                n_blocks=config.n_blocks,
-                dropout=config.dropout,
-            )
-        else:
-            self.encoder = StructuredTransformer(
-                d_model=config.d_model,
-                n_layers=config.n_layers,
-                n_heads=config.n_heads,
-                ff=config.ff,
-                dropout=config.dropout,
-            )
+        self.encoder = build_encoder(config)
         self.head = None
         self.mean_head = None
         self.shape_head = None
@@ -137,6 +145,45 @@ class SurrogateNet(nn.Module):
             "corr": corr,
         })
         return shared
+
+
+class ShapeNet(nn.Module):
+    """Field-only ratio curve. The design vector is not an input."""
+
+    def __init__(self, config: SurrogateConfig):
+        super().__init__()
+        if config.head not in ("gauss_lognorm", "gamma"):
+            raise ValueError("a shape model needs the gauss_lognorm or gamma head")
+        self.config = config
+        if config.head == "gamma":
+            self.shape_head = GammaShapeHead(scale_floor=config.scale_floor)
+        else:
+            self.shape_head = ShapeHead(scale_floor=config.scale_floor, copula=False)
+
+    def forward(self, field):
+        if self.config.head == "gamma":
+            return {"shape": self.shape_head(field)}
+        gaussian_scale, lognormal_scale, logit, _corr = self.shape_head(field)
+        return {
+            "gaussian_scale": gaussian_scale,
+            "lognormal_scale": lognormal_scale,
+            "logit": logit,
+            "corr": None,
+        }
+
+
+class MeanNet(nn.Module):
+    """Design-and-field arithmetic mean. The ratio curve is not an input."""
+
+    def __init__(self, config: SurrogateConfig):
+        super().__init__()
+        self.config = config
+        self.encoder = build_encoder(config)
+        self.mean_head = ArithmeticMeanHead(self.encoder.out_dim)
+
+    def forward(self, design, field):
+        mean, typical = self.mean_head(self.encoder(design, field), field)
+        return {"mean": mean, "typical": typical}
 
 
 class SurrogatePredictor:
@@ -512,6 +559,157 @@ class EnsemblePredictor(SurrogatePredictor):
         if device is None:
             device = default_device()
         return cls(members, device)
+
+
+class ShapePredictor:
+    """Stray-field amplitude in, unit-mean ratio distribution out.
+
+    Held-out ratios are formed with the observed sample mean. The predicted
+    mean is not an input.
+    """
+
+    def __init__(self, model, e_ref, device="cpu"):
+        self.model = model
+        self.e_ref = float(e_ref)
+        self.device = torch.device(device)
+        self.model.to(self.device)
+        self.model.eval()
+
+    @property
+    def config(self):
+        return self.model.config
+
+    def parameters_at(self, sigma):
+        sigma = np.asarray(sigma, dtype=np.float64).reshape(-1)
+        field = field_features(sigma, self.e_ref)
+        self.model.eval()
+        with torch.no_grad():
+            pred = self.model(to_tensor(field, dtype=torch.float32, device=self.device))
+        return {key: None if value is None else tensor_to_numpy(value.detach().cpu()) for key, value in pred.items()}
+
+    def sample_ratios(self, sigma, n_samples=32, rng=None):
+        sigma = np.asarray(sigma, dtype=np.float64).reshape(-1)
+        params = self.parameters_at(sigma)
+        generator = _rng(rng)
+        if self.config.head == "gamma":
+            ratios = sample_unit_gamma(params["shape"], generator, (int(n_samples), len(sigma), params["shape"].shape[-1]))
+        else:
+            weight = 1.0 / (1.0 + np.exp(-params["logit"]))
+            ratios = sample_mixture_ratios(
+                params["gaussian_scale"], params["lognormal_scale"], weight, generator, int(n_samples)
+            )
+        frozen = sigma <= 0.0
+        if np.any(frozen):
+            ratios[:, frozen, :] = 1.0
+        return ratios
+
+    def curve_cv(self, sigma):
+        params = self.parameters_at(sigma)
+        if self.config.head == "gamma":
+            variance = gamma_ratio_variance(params["shape"])
+        else:
+            weight = 1.0 / (1.0 + np.exp(-params["logit"]))
+            variance = ratio_variance(params["gaussian_scale"], params["lognormal_scale"], weight)
+        return np.sqrt(np.maximum(variance, 0.0))
+
+    def working_nll(self, sigma, quanta, valid):
+        from .factorized import shape_ratio_nll
+
+        sigma = np.asarray(sigma, dtype=np.float64).reshape(-1)
+        field = field_features(sigma, self.e_ref)
+        self.model.eval()
+        with torch.no_grad():
+            pred = self.model(to_tensor(field, dtype=torch.float32, device=self.device))
+            nll, _usable = shape_ratio_nll(
+                pred,
+                to_tensor(np.nan_to_num(quanta, nan=0.0), dtype=torch.float32, device=self.device),
+                to_tensor(np.asarray(valid, dtype=np.bool_), dtype=torch.bool, device=self.device),
+            )
+        scores = tensor_to_numpy(nll.detach().cpu())
+        scores[sigma <= 0.0] = np.nan
+        return scores
+
+    def save(self, path, extra=None):
+        payload = {
+            "kind": "shape",
+            "state_dict": self.model.state_dict(),
+            "config": asdict(self.config),
+            "e_ref": self.e_ref,
+        }
+        if extra:
+            payload.update(extra)
+        torch.save(payload, path)
+
+    @classmethod
+    def load(cls, path, device=None):
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        if payload.get("kind") != "shape":
+            raise ValueError("expected a shape checkpoint")
+        allowed = {item.name for item in fields(SurrogateConfig)}
+        config = SurrogateConfig(**{key: value for key, value in payload["config"].items() if key in allowed})
+        model = ShapeNet(config)
+        model.load_state_dict(payload["state_dict"])
+        if device is None:
+            device = default_device()
+        return cls(model, payload["e_ref"], device)
+
+
+class MeanPredictor:
+    """Design and stray-field amplitude in, arithmetic-mean phonon number out."""
+
+    def __init__(self, model, lower, upper, e_ref, device="cpu"):
+        self.model = model
+        self.lower = np.asarray(lower, dtype=np.float64)
+        self.upper = np.asarray(upper, dtype=np.float64)
+        self.e_ref = float(e_ref)
+        self.device = torch.device(device)
+        self.model.to(self.device)
+        self.model.eval()
+
+    @property
+    def config(self):
+        return self.model.config
+
+    def arithmetic_mean(self, design, sigma):
+        design, sigma = _batch(design, sigma)
+        design_n = normalize_design(design, self.lower, self.upper)
+        field = field_features(sigma, self.e_ref)
+        self.model.eval()
+        with torch.no_grad():
+            pred = self.model(
+                to_tensor(design_n, dtype=torch.float32, device=self.device),
+                to_tensor(field, dtype=torch.float32, device=self.device),
+            )
+        return tensor_to_numpy(pred["mean"].detach().cpu())
+
+    def expected_total(self, design, sigma):
+        return np.sum(self.arithmetic_mean(design, sigma), axis=-1)
+
+    def save(self, path, extra=None):
+        payload = {
+            "kind": "mean",
+            "state_dict": self.model.state_dict(),
+            "config": asdict(self.config),
+            "lower": self.lower,
+            "upper": self.upper,
+            "e_ref": self.e_ref,
+        }
+        if extra:
+            payload.update(extra)
+        torch.save(payload, path)
+
+    @classmethod
+    def load(cls, path, device=None):
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        if payload.get("kind") != "mean":
+            raise ValueError("expected a mean checkpoint")
+        allowed = {item.name for item in fields(SurrogateConfig)}
+        config = SurrogateConfig(**{key: value for key, value in payload["config"].items() if key in allowed})
+        model = MeanNet(config)
+        model.load_state_dict(payload["state_dict"])
+        if device is None:
+            device = default_device()
+        return cls(model, payload["lower"], payload["upper"], payload["e_ref"], device)
 
 
 def default_device():

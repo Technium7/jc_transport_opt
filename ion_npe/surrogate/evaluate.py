@@ -112,6 +112,139 @@ def rank_metrics(sigma, predicted, truth, k=10):
     return rows
 
 
+def evaluate_shape_model(predictor, table, indices, n_samples=2048, rng=0):
+    """Score the ratio curve on held-out designs using their observed means.
+
+    The shape model is not fit on these designs. Zero field is reported and
+    then left out of the density, because those seeds sit on the mean.
+    """
+    from .factorized import MEAN_FLOOR, QUANTILE_LEVELS, _mixture_cdf_numpy
+
+    indices = np.asarray(indices, dtype=int)
+    sigma = np.asarray(table.sigma[indices], dtype=np.float64)
+    quanta = np.asarray(table.quanta[indices], dtype=np.float64)
+    valid = np.asarray(table.valid[indices], dtype=bool)
+    nll = predictor.working_nll(sigma, quanta, valid)
+    curve_cv = predictor.curve_cv(sigma)
+    params = predictor.parameters_at(sigma)
+    generator = np.random.default_rng(int(rng))
+    rows = []
+    for label in np.unique(np.round(sigma, 8)):
+        chosen = np.flatnonzero(np.round(sigma, 8) == label)
+        if chosen.size == 0:
+            continue
+        draw = predictor.sample_ratios(np.array([label]), n_samples=int(n_samples), rng=generator)[:, 0, :]
+        low_50, high_50 = np.quantile(draw, [0.25, 0.75], axis=0)
+        low_90, high_90 = np.quantile(draw, [0.05, 0.95], axis=0)
+        per_mode = [{"obs_cv": [], "obs_frac": [], "cdf_error": [], "cover_50": [], "cover_90": []} for _ in range(3)]
+        for index in chosen:
+            ratio, usable = _observed_ratios(quanta[index], valid[index], MEAN_FLOOR)
+            for mode in range(3):
+                seeds = ratio[usable[:, mode], mode]
+                if seeds.size < 2:
+                    continue
+                bucket = per_mode[mode]
+                bucket["obs_cv"].append(float(seeds.std() / max(float(seeds.mean()), 1e-30)))
+                bucket["obs_frac"].append(float(np.mean(seeds < 1.0)))
+                if label > 0.0:
+                    bucket["cdf_error"].append(
+                        _quantile_cdf_error(seeds, params, index, mode, predictor.config.head, QUANTILE_LEVELS, _mixture_cdf_numpy)
+                    )
+                    bucket["cover_50"].append(float(np.mean((seeds >= low_50[mode]) & (seeds <= high_50[mode]))))
+                    bucket["cover_90"].append(float(np.mean((seeds >= low_90[mode]) & (seeds <= high_90[mode]))))
+        positive = chosen[np.isfinite(nll[chosen])]
+        modes = []
+        curve = np.median(curve_cv[chosen], axis=0)
+        anchor = int(chosen[0])
+        for mode in range(3):
+            bucket = per_mode[mode]
+            modes.append({
+                "mode": mode,
+                "obs_cv": _finite_median(bucket["obs_cv"]),
+                "curve_cv": float(curve[mode]),
+                "obs_frac_below": _finite_median(bucket["obs_frac"]),
+                "pred_frac_below": _ratio_cdf(1.0, params, anchor, mode, predictor.config.head, _mixture_cdf_numpy) if label > 0.0 else None,
+                "quantile_cdf_mae": _finite_median(bucket["cdf_error"]) if label > 0.0 else None,
+                "coverage_50": _finite_median(bucket["cover_50"]) if label > 0.0 else None,
+                "coverage_90": _finite_median(bucket["cover_90"]) if label > 0.0 else None,
+            })
+        rows.append({
+            "sigma": float(label),
+            "n": int(chosen.size),
+            "scored": bool(label > 0.0),
+            "working_nll": _nanmean(nll[positive]) if label > 0.0 else None,
+            "modes": modes,
+        })
+    scored = np.isfinite(nll)
+    return {
+        "likelihood": "working_product_of_normalized_ratios",
+        "dependence": (
+            "Ratios that share a sample mean are dependent. The product density is a "
+            "training objective. Coverage and the order-statistic CDF are the calibration checks."
+        ),
+        "n": int(len(indices)),
+        "working_nll": _nanmean(nll[scored]),
+        "by_field": rows,
+    }
+
+
+def evaluate_mean_model(predictor, table, indices, ranking_k=10):
+    """Score arithmetic-mean heating. The ratio distribution is not used."""
+    indices = np.asarray(indices, dtype=int)
+    design = table.design[indices]
+    sigma = table.sigma[indices]
+    quanta = table.quanta[indices]
+    valid = table.valid[indices]
+    predicted = predictor.arithmetic_mean(design, sigma)
+    observed = _masked_mean(quanta, valid)
+    keep = valid.any(axis=1) & np.isfinite(observed).all(axis=1) & (observed > 0.0).all(axis=1)
+    log_pred = np.log10(np.maximum(predicted, 1e-30))
+    log_obs = np.log10(np.maximum(observed, 1e-30))
+    return {
+        "n": int(keep.sum()),
+        "arith_log_rmse": _rmse(log_pred[keep], log_obs[keep]),
+        "arith_log_mae": _mae(log_pred[keep], log_obs[keep]),
+        "by_field": _arith_by_field(sigma, keep, predicted, observed, np.full(len(sigma), np.nan)),
+        "ranking": rank_metrics(sigma[keep], predicted[keep].sum(axis=-1), _true_total(quanta, valid)[keep], k=ranking_k),
+    }
+
+
+def _observed_ratios(quanta, valid, mean_floor):
+    quanta = np.asarray(quanta, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    safe = np.where(valid[:, None], quanta, 0.0)
+    count = np.maximum(valid.astype(np.float64).sum(), 1.0)
+    observed = safe.sum(axis=0) / count
+    usable = valid[:, None] & (observed[None, :] >= float(mean_floor))
+    ratio = np.ones(safe.shape, dtype=np.float64)
+    np.divide(safe, observed[None, :], out=ratio, where=usable)
+    return ratio, usable
+
+
+def _quantile_cdf_error(seeds, params, index, mode, head, levels, mixture_cdf):
+    errors = []
+    for level in levels:
+        quantile = float(np.quantile(seeds, level))
+        errors.append(abs(_ratio_cdf(quantile, params, index, mode, head, mixture_cdf) - level))
+    return float(np.mean(errors))
+
+
+def _ratio_cdf(ratio, params, index, mode, head, mixture_cdf):
+    if head == "gamma":
+        from scipy.special import gammainc
+
+        shape = float(params["shape"][index, mode])
+        return float(gammainc(shape, shape * max(ratio, 0.0)))
+    weight = float(1.0 / (1.0 + np.exp(-params["logit"][index, mode])))
+    cdf = mixture_cdf(
+        np.asarray(ratio, dtype=np.float64),
+        np.asarray(params["gaussian_scale"][index, mode], dtype=np.float64),
+        np.asarray(params["lognormal_scale"][index, mode], dtype=np.float64),
+        np.asarray(weight, dtype=np.float64),
+    )
+    return float(np.asarray(cdf).reshape(-1)[0])
+
+
 def fit_legacy(split, epochs=20, hidden=48, seed=0):
     """Train the original stochastic MLP on design vectors only, where it applies.
 

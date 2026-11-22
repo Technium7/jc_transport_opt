@@ -11,7 +11,9 @@ import torch
 from .data import describe, load_field_data, make_split, table_fingerprint
 from .evaluate import (
     evaluate_legacy,
+    evaluate_mean_model,
     evaluate_predictor,
+    evaluate_shape_model,
     fit_legacy,
     plot_coverage,
     plot_distributions,
@@ -24,7 +26,7 @@ from .evaluate import (
     save_metrics,
 )
 from .model import EnsemblePredictor, SurrogateConfig, SurrogatePredictor, default_device
-from .train import save_training, train_surrogate
+from .train import save_training, train_mean_model, train_shape_model, train_surrogate
 
 
 # name, encoder, head, mixture components, mean-loss weight, copula
@@ -178,6 +180,80 @@ def run_benchmark(
         "epochs": int(epochs),
         "patience": int(patience),
         "mode_correlation": _mode_correlation(table),
+    }, indent=2))
+    return summaries
+
+
+def run_independent_study(
+    data,
+    out,
+    epochs=60,
+    patience=12,
+    batch_size=128,
+    holdout_fields=(0.5, 2.0),
+    seed=0,
+    device="cpu",
+    n_samples=2048,
+):
+    """Train the mean and the ratio curve separately and score each on its own.
+
+    The shape models never see the design. The mean model never sees the ratio
+    curve. Held-out ratios are built from the observed sample mean.
+    """
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    if device is None:
+        device = default_device()
+    table = load_field_data(data)
+    split = make_split(table, holdout_fields=holdout_fields, seed=seed)
+    print(describe(table), flush=True)
+    print(
+        "split train {} val {} test {} interp {}  holdout {}".format(
+            len(split.train), len(split.val), len(split.test), len(split.interp), list(holdout_fields)
+        ),
+        flush=True,
+    )
+    jobs = (
+        ("shape_gauss_lognorm", "shape", SurrogateConfig(arch="transformer", head="gauss_lognorm")),
+        ("shape_gamma", "shape", SurrogateConfig(arch="transformer", head="gamma")),
+        ("mean_transformer", "mean", SurrogateConfig(arch="transformer", head="gauss_lognorm")),
+    )
+    summaries = []
+    for name, kind, config in jobs:
+        print("training {}".format(name), flush=True)
+        if kind == "shape":
+            predictor = train_shape_model(
+                split, config, epochs=epochs, patience=patience, batch_size=batch_size, seed=seed, device=device, log_every=5,
+            )
+            metrics = evaluate_shape_model(predictor, table, split.test, n_samples=n_samples, rng=seed)
+            interp = evaluate_shape_model(predictor, table, split.interp, n_samples=n_samples, rng=seed + 1) if len(split.interp) else None
+        else:
+            predictor = train_mean_model(
+                split, config, epochs=epochs, patience=patience, batch_size=batch_size, seed=seed, device=device, log_every=5,
+            )
+            metrics = evaluate_mean_model(predictor, table, split.test)
+            interp = evaluate_mean_model(predictor, table, split.interp) if len(split.interp) else None
+        save_training(
+            out / "{}.pt".format(name), predictor, split, predictor.history,
+            epoch=len(predictor.history["train"]), best_score=predictor.best_score,
+        )
+        report = out / name
+        report.mkdir(parents=True, exist_ok=True)
+        save_metrics(report / "test.json", metrics)
+        if interp is not None:
+            save_metrics(report / "interp.json", interp)
+        _try_plot(lambda: plot_training(predictor.history, report / "loss.png", title=name))
+        summaries.append({"name": name, "kind": kind, "test": public_metrics(metrics), "interp": None if interp is None else public_metrics(interp)})
+    (out / "comparison.json").write_text(json.dumps({"models": summaries}, indent=2))
+    (out / "split.json").write_text(json.dumps({
+        "fingerprint": table_fingerprint(table),
+        "holdout_fields": [float(value) for value in holdout_fields],
+        "n_train": int(len(split.train)),
+        "n_val": int(len(split.val)),
+        "n_test": int(len(split.test)),
+        "n_interp": int(len(split.interp)),
+        "epochs": int(epochs),
+        "patience": int(patience),
     }, indent=2))
     return summaries
 
