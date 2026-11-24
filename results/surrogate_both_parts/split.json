@@ -1,0 +1,13 @@
+{
+  "fingerprint": "eeb201f64765cf2035fda7c3cd4e954ee0a8ca1b49d7aa38d41ffe869c79afd7",
+  "holdout_fields": [
+    0.5,
+    2.0
+  ],
+  "n_train": 14048,
+  "n_val": 2980,
+  "n_test": 2965,
+  "n_interp": 7296,
+  "epochs": 60,
+  "patience": 12
+}

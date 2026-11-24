@@ -1,0 +1,37 @@
+{
+  "n": 3660,
+  "arith_log_rmse": 3.572123239993818,
+  "arith_log_mae": 2.7856805945341585,
+  "by_field": [
+    {
+      "sigma": 0.5,
+      "arith_log_rmse": 3.468852528121963,
+      "linear_nll": null
+    },
+    {
+      "sigma": 2.0,
+      "arith_log_rmse": 3.6727077351945265,
+      "linear_nll": null
+    }
+  ],
+  "ranking": [
+    {
+      "sigma": 0.5,
+      "n": 1832,
+      "predicted_best_true_total": 378.42869470747576,
+      "true_best_total": 0.21370712367374325,
+      "log10_regret": 3.2481650606637222,
+      "top_overlap": 0.0,
+      "spearman_log": 0.7071125343960708
+    },
+    {
+      "sigma": 2.0,
+      "n": 1828,
+      "predicted_best_true_total": 273.0557260732428,
+      "true_best_total": 0.6309240971208234,
+      "log10_regret": 2.6362741733780215,
+      "top_overlap": 0.0,
+      "spearman_log": 0.7234635936064505
+    }
+  ]
+}

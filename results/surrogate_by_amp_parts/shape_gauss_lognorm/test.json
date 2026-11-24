@@ -1,0 +1,198 @@
+{
+  "likelihood": "working_product_of_normalized_ratios",
+  "dependence": "Ratios that share a sample mean are dependent. The product density is a training objective. Coverage and the order-statistic CDF are the calibration checks.",
+  "n": 1362,
+  "working_nll": 0.6820376177765545,
+  "by_field": [
+    {
+      "sigma": 0.1,
+      "n": 296,
+      "scored": 1,
+      "working_nll": -0.11679339919239069,
+      "modes": [
+        {
+          "mode": 0,
+          "obs_cv": 0.012934630497811038,
+          "curve_cv": 0.03302203204736317,
+          "obs_frac_below": 0.5,
+          "pred_frac_below": 0.5000048032951719,
+          "quantile_cdf_mae": 0.1718428360475874,
+          "coverage_50": 0.8,
+          "coverage_90": 1.0
+        },
+        {
+          "mode": 1,
+          "obs_cv": 0.05639894876627501,
+          "curve_cv": 0.12625629608899033,
+          "obs_frac_below": 0.55,
+          "pred_frac_below": 0.5006311872457855,
+          "quantile_cdf_mae": 0.20060568322296848,
+          "coverage_50": 0.9,
+          "coverage_90": 1.0
+        },
+        {
+          "mode": 2,
+          "obs_cv": 0.011250755643818267,
+          "curve_cv": 0.023482554109582394,
+          "obs_frac_below": 0.5,
+          "pred_frac_below": 0.5000005407140056,
+          "quantile_cdf_mae": 0.16608005159643593,
+          "coverage_50": 0.825,
+          "coverage_90": 1.0
+        }
+      ]
+    },
+    {
+      "sigma": 0.2,
+      "n": 285,
+      "scored": 1,
+      "working_nll": 0.6359089260474938,
+      "modes": [
+        {
+          "mode": 0,
+          "obs_cv": 0.03516186420321251,
+          "curve_cv": 0.04470724051144167,
+          "obs_frac_below": 0.5,
+          "pred_frac_below": 0.5000050778886725,
+          "quantile_cdf_mae": 0.14113326447032737,
+          "coverage_50": 0.45,
+          "coverage_90": 0.85
+        },
+        {
+          "mode": 1,
+          "obs_cv": 0.11777032124834343,
+          "curve_cv": 0.16702129379645853,
+          "obs_frac_below": 0.55,
+          "pred_frac_below": 0.5007308327446259,
+          "quantile_cdf_mae": 0.18352502246467406,
+          "coverage_50": 0.6,
+          "coverage_90": 0.95
+        },
+        {
+          "mode": 2,
+          "obs_cv": 0.023530206054852957,
+          "curve_cv": 0.03330721333956031,
+          "obs_frac_below": 0.5,
+          "pred_frac_below": 0.5000005511108252,
+          "quantile_cdf_mae": 0.14817489294792116,
+          "coverage_50": 0.6,
+          "coverage_90": 0.9
+        }
+      ]
+    },
+    {
+      "sigma": 1.0,
+      "n": 238,
+      "scored": 1,
+      "working_nll": 0.7382790180541343,
+      "modes": [
+        {
+          "mode": 0,
+          "obs_cv": 0.13571092363195378,
+          "curve_cv": 0.30435086520414084,
+          "obs_frac_below": 0.55,
+          "pred_frac_below": 0.5003162186536652,
+          "quantile_cdf_mae": 0.17789603606029808,
+          "coverage_50": 0.8,
+          "coverage_90": 0.975
+        },
+        {
+          "mode": 1,
+          "obs_cv": 0.5289880113499758,
+          "curve_cv": 0.6033789553829163,
+          "obs_frac_below": 0.65,
+          "pred_frac_below": 0.5315232484113513,
+          "quantile_cdf_mae": 0.16286995573229393,
+          "coverage_50": 0.6,
+          "coverage_90": 0.9
+        },
+        {
+          "mode": 2,
+          "obs_cv": 0.1118832440686399,
+          "curve_cv": 0.22935209149263858,
+          "obs_frac_below": 0.5,
+          "pred_frac_below": 0.5000067735920771,
+          "quantile_cdf_mae": 0.16723844208539873,
+          "coverage_50": 0.85,
+          "coverage_90": 1.0
+        }
+      ]
+    },
+    {
+      "sigma": 5.0,
+      "n": 269,
+      "scored": 1,
+      "working_nll": 1.0596296917837333,
+      "modes": [
+        {
+          "mode": 0,
+          "obs_cv": 0.8947770839926681,
+          "curve_cv": 1.0465357579119838,
+          "obs_frac_below": 0.6,
+          "pred_frac_below": 0.573466801626272,
+          "quantile_cdf_mae": 0.18970975419539712,
+          "coverage_50": 0.55,
+          "coverage_90": 0.85
+        },
+        {
+          "mode": 1,
+          "obs_cv": 1.440182314540615,
+          "curve_cv": 2.269693765127362,
+          "obs_frac_below": 0.7,
+          "pred_frac_below": 0.6384691987986081,
+          "quantile_cdf_mae": 0.12012374670102144,
+          "coverage_50": 0.35,
+          "coverage_90": 0.75
+        },
+        {
+          "mode": 2,
+          "obs_cv": 0.6364868649028309,
+          "curve_cv": 0.9817134882520715,
+          "obs_frac_below": 0.6,
+          "pred_frac_below": 0.5648380739389474,
+          "quantile_cdf_mae": 0.17665016210716356,
+          "coverage_50": 0.65,
+          "coverage_90": 0.9
+        }
+      ]
+    },
+    {
+      "sigma": 10.0,
+      "n": 274,
+      "scored": 1,
+      "working_nll": 1.1734351980378495,
+      "modes": [
+        {
+          "mode": 0,
+          "obs_cv": 1.8998784654631233,
+          "curve_cv": 1.7500174590734223,
+          "obs_frac_below": 0.75,
+          "pred_frac_below": 0.6124564997329806,
+          "quantile_cdf_mae": 0.212241833619674,
+          "coverage_50": 0.15,
+          "coverage_90": 0.5
+        },
+        {
+          "mode": 1,
+          "obs_cv": 2.5441157507075722,
+          "curve_cv": 3.6030077890214116,
+          "obs_frac_below": 0.85,
+          "pred_frac_below": 0.6804214788606353,
+          "quantile_cdf_mae": 0.21728197589601939,
+          "coverage_50": 0.15,
+          "coverage_90": 0.35
+        },
+        {
+          "mode": 2,
+          "obs_cv": 1.5623978853744491,
+          "curve_cv": 1.5495364395786255,
+          "obs_frac_below": 0.75,
+          "pred_frac_below": 0.5927551608952248,
+          "quantile_cdf_mae": 0.21221666564857966,
+          "coverage_50": 0.15,
+          "coverage_90": 0.4
+        }
+      ]
+    }
+  ]
+}

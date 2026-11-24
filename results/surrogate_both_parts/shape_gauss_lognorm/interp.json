@@ -1,0 +1,84 @@
+{
+  "likelihood": "working_product_of_normalized_ratios",
+  "dependence": "Ratios that share a sample mean are dependent. The product density is a training objective. Coverage and the order-statistic CDF are the calibration checks.",
+  "n": 7296,
+  "working_nll": 0.9152042984596542,
+  "by_field": [
+    {
+      "sigma": 0.5,
+      "n": 3650,
+      "scored": 1,
+      "working_nll": 0.9080008331345988,
+      "modes": [
+        {
+          "mode": 0,
+          "obs_cv": 0.08373425558521616,
+          "curve_cv": 0.1209147986904853,
+          "obs_frac_below": 0.55,
+          "pred_frac_below": 0.5000615659697731,
+          "quantile_cdf_mae": 0.1517254561733375,
+          "coverage_50": 0.6,
+          "coverage_90": 0.9
+        },
+        {
+          "mode": 1,
+          "obs_cv": 0.327072290523415,
+          "curve_cv": 0.3555501459960509,
+          "obs_frac_below": 0.6,
+          "pred_frac_below": 0.5035584105708596,
+          "quantile_cdf_mae": 0.1642721903863295,
+          "coverage_50": 0.45,
+          "coverage_90": 0.9
+        },
+        {
+          "mode": 2,
+          "obs_cv": 0.06594210972196485,
+          "curve_cv": 0.0903171794237966,
+          "obs_frac_below": 0.5,
+          "pred_frac_below": 0.5000060497992898,
+          "quantile_cdf_mae": 0.13535790436987527,
+          "coverage_50": 0.55,
+          "coverage_90": 0.9
+        }
+      ]
+    },
+    {
+      "sigma": 2.0,
+      "n": 3646,
+      "scored": 1,
+      "working_nll": 0.9224156666539636,
+      "modes": [
+        {
+          "mode": 0,
+          "obs_cv": 0.3772854128217795,
+          "curve_cv": 0.6436850178911139,
+          "obs_frac_below": 0.55,
+          "pred_frac_below": 0.5421046750665942,
+          "quantile_cdf_mae": 0.1939889941548657,
+          "coverage_50": 0.8,
+          "coverage_90": 0.95
+        },
+        {
+          "mode": 1,
+          "obs_cv": 1.00786772555173,
+          "curve_cv": 1.0756441328726285,
+          "obs_frac_below": 0.65,
+          "pred_frac_below": 0.5956271973195867,
+          "quantile_cdf_mae": 0.13617321497357832,
+          "coverage_50": 0.45,
+          "coverage_90": 0.85
+        },
+        {
+          "mode": 2,
+          "obs_cv": 0.2894201666980484,
+          "curve_cv": 0.6025936576500894,
+          "obs_frac_below": 0.55,
+          "pred_frac_below": 0.5326207309653757,
+          "quantile_cdf_mae": 0.19864356023111174,
+          "coverage_50": 0.85,
+          "coverage_90": 1.0
+        }
+      ]
+    }
+  ]
+}
