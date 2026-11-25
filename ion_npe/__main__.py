@@ -233,6 +233,24 @@ def _cmd_sweep(args):
     )
 
 
+def _cmd_field_cem(args):
+    from .surrogate.search import optimize_at_field
+
+    optimize_at_field(
+        args.out,
+        args.data,
+        sigma=args.noise,
+        init_weights=args.init or None,
+        iterations=args.iterations,
+        n_screen=args.screen,
+        n_simulate=args.simulate,
+        epochs=args.epochs,
+        patience=args.patience,
+        seed=args.seed,
+        simulate_kwargs=_physics(args),
+    )
+
+
 def _cmd_joint(args):
     optimize_joint(
         args.out,
@@ -410,6 +428,28 @@ def main(argv=None):
     joint.add_argument("--lbfgs", type=int, default=20)
     joint.add_argument("--seed", type=int, default=0)
     joint.set_defaults(func=_cmd_joint)
+
+    field_cem = sub.add_parser(
+        "field-cem",
+        help="train the field surrogate and cross-entropy search at one stray-field amplitude",
+    )
+    _add_physics(field_cem)
+    field_cem.add_argument("-o", "--out", type=str, default="outputs/cem_10vm")
+    field_cem.add_argument(
+        "--data", type=str, default="results/field_by_amp/noise_10/joint.npz",
+        help="initial simulations; the amplitude stored in the file is the search field",
+    )
+    field_cem.add_argument(
+        "--init", type=str, default="results/surrogate_by_amp/transformer_gauss_lognorm.pt",
+        help="checkpoint to start from; later rounds continue from the previous fit",
+    )
+    field_cem.add_argument("--iterations", type=int, default=4, help="cross-entropy rounds after the first fit")
+    field_cem.add_argument("--screen", type=int, default=1000, help="candidates scored by the surrogate each round")
+    field_cem.add_argument("--simulate", type=int, default=40, help="new dynamics simulations each round")
+    field_cem.add_argument("--epochs", type=int, default=40)
+    field_cem.add_argument("--patience", type=int, default=10)
+    field_cem.add_argument("--seed", type=int, default=0)
+    field_cem.set_defaults(func=_cmd_field_cem, noise=10.0)
 
     sweep = sub.add_parser(
         "sweep",

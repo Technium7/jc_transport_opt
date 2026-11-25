@@ -44,13 +44,16 @@ def train_surrogate(
     grad_clip=1.0,
     log_every=5,
     resume=None,
+    init_weights=None,
     shape_epochs=0,
 ):
     """Fit one surrogate. Returns the predictor restored to its best validation weights.
 
     ``shape_epochs`` continues training with the mean head and the encoder
     frozen, so the per-design cloud loss can move the shape after the mean
-    error has stopped deciding early stopping.
+    error has stopped deciding early stopping. ``init_weights`` loads a
+    checkpoint and then trains from epoch 0. ``resume`` also restores the
+    optimizer and continues the saved epoch count.
     """
     if device is None:
         device = default_device()
@@ -69,6 +72,11 @@ def train_surrogate(
     history = {"train": [], "val": []}
     best_score = np.inf
     best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+    if init_weights:
+        payload = torch.load(init_weights, map_location="cpu", weights_only=False)
+        model.load_state_dict(payload["state_dict"])
+        model.to(device)
+        best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
     if resume:
         start, best_score, history = _resume(resume, model, optimizer, scheduler, device)
         best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
